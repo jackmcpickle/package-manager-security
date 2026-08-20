@@ -102,6 +102,45 @@ test("bun and uv markers are primary managers", () => {
   expect(uv[0]?.managers.some((m) => m.name === "uv" && m.role === "primary")).toBe(true);
 });
 
+test("a .git file marks a worktree as a git root", () => {
+  const projects = discoverProjects(
+    "/many",
+    memoryFs({
+      "/many/alpha/.git": "gitdir: /original/.git/worktrees/alpha\n",
+      "/many/alpha/package.json": `{"name":"alpha"}`,
+      "/many/alpha/package-lock.json": `{"lockfileVersion":3}`,
+      "/many/beta/.git": "gitdir: /original/.git/worktrees/beta\n",
+      "/many/beta/package.json": `{"name":"beta"}`,
+      "/many/beta/package-lock.json": `{"lockfileVersion":3}`,
+    }),
+  );
+  const roots = projects.map((p) => p.root.split("/").at(-1)).sort();
+  expect(roots).toEqual(["alpha", "beta"]);
+  expect(projects.every((p) => p.gitRoot === p.root)).toBe(true);
+});
+
+test("yarnrc without yarn.lock is not yarn and does not hide npm", () => {
+  const projects = discoverProjects(
+    "/proj",
+    memoryFs({
+      "/proj/package.json": `{"name":"proj"}`,
+      "/proj/.yarnrc.yml": "nodeLinker: node-modules\n",
+    }),
+  );
+  expect(projects[0]?.managers.some((m) => m.name === "yarn")).toBe(false);
+  expect(projects[0]?.managers.some((m) => m.name === "npm" && m.role === "primary")).toBe(true);
+});
+
+test("standalone uv.toml is not a uv primary", () => {
+  const projects = discoverProjects(
+    "/only-uvtoml",
+    memoryFs({
+      "/only-uvtoml/uv.toml": "prerelease = \"if-necessary\"\n",
+    }),
+  );
+  expect(projects.some((p) => p.managers.some((m) => m.name === "uv"))).toBe(false);
+});
+
 test("skip directories are not walked for repos or PM roots", () => {
   const projects = discoverProjects(
     "/root",

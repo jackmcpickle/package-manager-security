@@ -40,7 +40,7 @@ export function discoverProjects(root: string, opts?: DiscoverFs): Project[] {
   const projects: Project[] = [];
 
   for (const repo of repos) {
-    const gitRoot = fs.isDir(join(repo, ".git")) ? repo : null;
+    const gitRoot = hasGit(repo, fs) ? repo : null;
     for (const pmRoot of findPmRoots(repo, fs)) {
       const managers = detectManagers(pmRoot, fs);
       if (managers.length === 0) continue;
@@ -84,7 +84,7 @@ function defaultIsDir(path: string): boolean {
 }
 
 function findRepoTrees(root: string, fs: Fs): string[] {
-  if (fs.isDir(join(root, ".git"))) return [root];
+  if (hasGit(root, fs)) return [root];
 
   const nested = findNestedGitRepos(root, fs);
   if (nested.length === 0) return [root];
@@ -100,7 +100,7 @@ function findNestedGitRepos(dir: string, fs: Fs): string[] {
     if (SKIP_DIRS.has(name)) continue;
     const child = join(dir, name);
     if (!fs.isDir(child)) continue;
-    if (fs.isDir(join(child, ".git"))) {
+    if (hasGit(child, fs)) {
       found.push(child);
       continue;
     }
@@ -119,7 +119,7 @@ function findPmRoots(repo: string, fs: Fs): string[] {
       if (SKIP_DIRS.has(name)) continue;
       const child = join(dir, name);
       if (!fs.isDir(child)) continue;
-      if (fs.isDir(join(child, ".git")) && child !== repo) continue;
+      if (hasGit(child, fs) && child !== repo) continue;
       walk(child, false);
     }
   };
@@ -188,7 +188,7 @@ function pickJsPrimary(
   if (names.has("pnpm-lock.yaml") || names.has("pnpm-workspace.yaml")) {
     candidates.push("pnpm");
   }
-  if (names.has("yarn.lock") || names.has(".yarnrc.yml")) candidates.push("yarn");
+  if (names.has("yarn.lock")) candidates.push("yarn");
   if (names.has("bun.lock") || names.has("bun.lockb") || names.has("bunfig.toml")) {
     candidates.push("bun");
   }
@@ -233,7 +233,7 @@ function detectYarn(
   packageManager: string | undefined,
   jsPrimary: PackageManager | null,
 ): DetectedManager | null {
-  if (!names.has("yarn.lock") && !names.has(".yarnrc.yml")) return null;
+  if (!names.has("yarn.lock")) return null;
   const berry = names.has(".yarnrc.yml") || yarnMajor(packageManager) >= 2;
   const role: ManagerRole =
     jsPrimary !== null && jsPrimary !== "yarn"
@@ -310,7 +310,7 @@ function detectNpm(
 
 function detectUv(dir: string, names: Set<string>, fs: Fs): DetectedManager | null {
   const toolUv = hasToolUv(dir, fs);
-  if (!names.has("uv.lock") && !names.has("uv.toml") && !toolUv) return null;
+  if (!names.has("uv.lock") && !toolUv) return null;
   const configPath = names.has("uv.toml")
     ? join(dir, "uv.toml")
     : toolUv
@@ -369,4 +369,8 @@ function isJsManager(name: string): name is PackageManager {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasGit(dir: string, fs: Fs): boolean {
+  return fs.isDir(join(dir, ".git")) || fs.readDir(dir).includes(".git");
 }
