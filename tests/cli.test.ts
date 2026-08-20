@@ -2,10 +2,11 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { applySettings } from "../src/apply-settings";
 import { auditPath } from "../src/audit";
 import { createFsCache } from "../src/cache";
 import { createLineReader, run } from "../src/cli";
-import type { Finding } from "../src/domain";
+import type { DetectedManager, Finding, Project } from "../src/domain";
 import { loadPolicy } from "../src/policy";
 
 const cacheDir = mkdtempSync(join(tmpdir(), "pmsec-task10-cache-"));
@@ -434,6 +435,66 @@ test("auditPath below-gate advisory does not fail the standard preset gate", asy
     true,
   );
   expect(result.exitCode).toBe(0);
+});
+
+test("audit of a directory with zero discovered projects exits 2", async () => {
+  const root = join(import.meta.dir, "fixtures/empty-root");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const result = await run(["audit", root], {
+    stdout: { write: (s: string) => stdout.push(s) },
+    stderr: { write: (s: string) => stderr.push(s) },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "empty-root"), () => 1_000, 86_400_000),
+  });
+  expect(result.exitCode).toBe(2);
+});
+
+test("applySettings with --commit calls gitCommit exactly once with the repo root", () => {
+  const project: Project = {
+    root: "/repo",
+    gitRoot: "/repo",
+    managers: [
+      {
+        name: "npm",
+        role: "primary",
+        manifestPath: "/repo/package.json",
+        lockfilePath: "/repo/package-lock.json",
+        configPath: "/repo/.npmrc",
+      } satisfies DetectedManager,
+    ],
+  };
+  const finding: Finding = {
+    kind: "settings",
+    code: "scripts.unrestricted",
+    message: "scripts are not restricted",
+    severity: "high",
+    path: "/repo/.npmrc",
+    fixable: true,
+    manager: "npm",
+  };
+  const written: Record<string, string> = {};
+  const commitCalls: Array<{ root: string; message: string; files: string[] }> = [];
+  const result = applySettings(project, [finding], loadPolicy({}), {
+    readFile: (path) => (path === "/repo/.npmrc" ? "" : null),
+    writeFile: (path, body) => {
+      written[path] = body;
+    },
+    gitStatus: () => "clean",
+    gitCommit: (root, message, files) => {
+      commitCalls.push({ root, message, files });
+      return true;
+    },
+    force: false,
+    commit: true,
+  });
+  expect(result.committed).toBe(true);
+  expect(commitCalls).toHaveLength(1);
+  expect(commitCalls[0]!.root).toBe("/repo");
+  expect(Object.keys(written)).toEqual(["/repo/.npmrc"]);
 });
 
 test("stdin line reader keeps leftover lines after the first newline", async () => {
