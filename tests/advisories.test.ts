@@ -174,6 +174,55 @@ test("npm audit JSON populates package currentVersion and fixVersion on findings
   expect(finding?.fixVersion).toBe("1.3.0");
 });
 
+test("advisory range is not used as the installed currentVersion", async () => {
+  const cache = createFsCache(join(cacheDir4, "range"), () => 1_000, 86_400_000);
+  const npmProject: Project = {
+    root: "/p",
+    gitRoot: "/p",
+    managers: [
+      {
+        name: "npm",
+        role: "primary",
+        manifestPath: "/p/package.json",
+        lockfilePath: "/p/package-lock.json",
+        configPath: "/p/.npmrc",
+      },
+    ],
+  };
+  const result = await auditAdvisories(npmProject, loadPolicy({}), {
+    cache,
+    now: () => 1_000,
+    digest: () => "npm-range",
+    readFile: () => "lock",
+    run: async () => ({
+      code: 1,
+      stdout: JSON.stringify({
+        vulnerabilities: {
+          "left-pad": {
+            name: "left-pad",
+            severity: "high",
+            range: ">=1.0.0 <2.0.0",
+            fixAvailable: { name: "left-pad", version: "1.3.0" },
+            via: [
+              {
+                github_advisory_id: "GHSA-left-pad",
+                title: "left-pad high advisory",
+                severity: "high",
+              },
+            ],
+          },
+        },
+      }),
+      stderr: "",
+    }),
+  });
+  const finding = result.findings.find((row) => row.kind === "advisory");
+  expect(finding?.package).toBe("left-pad");
+  expect(finding?.currentVersion).toBeUndefined();
+  expect(finding?.currentVersion).not.toBe(">=1.0.0 <2.0.0");
+  expect(finding?.fixVersion).toBe("1.3.0");
+});
+
 test("uv json with deprecated and quarantine statuses emits those finding kinds", async () => {
   const cache = createFsCache(cacheDir4, () => 1_000, 86_400_000);
   const uvProject: Project = {

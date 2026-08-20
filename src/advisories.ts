@@ -341,13 +341,31 @@ function packageVersion(value: unknown): string | undefined {
 }
 
 function firstVersion(item: Record<string, unknown>): string {
-  if (typeof item.version === "string") return item.version;
+  const direct = concreteVersion(item.version) ?? concreteVersion(item.installedVersion);
+  if (direct !== undefined) return direct;
   if (Array.isArray(item.findings)) {
-    const first = item.findings[0];
-    if (isPlainObject(first) && first.version != null) return String(first.version);
+    for (const finding of item.findings) {
+      if (!isPlainObject(finding)) continue;
+      const version = concreteVersion(finding.version) ?? concreteVersion(finding.installedVersion);
+      if (version !== undefined) return version;
+    }
   }
-  if (typeof item.range === "string") return item.range;
+  if (Array.isArray(item.via)) {
+    for (const via of item.via) {
+      if (!isPlainObject(via)) continue;
+      const version = concreteVersion(via.version) ?? concreteVersion(via.installedVersion);
+      if (version !== undefined) return version;
+    }
+  }
   return "unknown";
+}
+
+function concreteVersion(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed === "" || /[<> =|^~*]/.test(trimmed)) return undefined;
+  if (!/^\d+\.\d+/.test(trimmed)) return undefined;
+  return trimmed;
 }
 
 function advisoryId(item: Record<string, unknown>): string {

@@ -79,7 +79,9 @@ export async function run(
       gitCommit: deps?.gitCommit ?? defaultGitCommit,
       prompt:
         deps?.prompt ??
-        (flags.interactive ? defaultPrompt(stdout, deps?.readLine ?? readStdinLine) : undefined),
+        (flags.interactive
+          ? defaultPrompt(stdout, deps?.readLine ?? createLineReader(createBunStdinChunkReader()))
+          : undefined),
       currentVersions: deps?.currentVersions,
       fixVersions: deps?.fixVersions,
     },
@@ -229,17 +231,34 @@ function defaultPrompt(
   };
 }
 
-async function readStdinLine(): Promise<string> {
+export function createLineReader(readChunk: () => Promise<string | null>): () => Promise<string> {
+  let leftover = "";
+  return async () => {
+    while (!leftover.includes("\n")) {
+      const chunk = await readChunk();
+      if (chunk === null) break;
+      leftover += chunk;
+    }
+    const nl = leftover.indexOf("\n");
+    if (nl === -1) {
+      const line = leftover;
+      leftover = "";
+      return line;
+    }
+    const line = leftover.slice(0, nl).replace(/\r$/, "");
+    leftover = leftover.slice(nl + 1);
+    return line;
+  };
+}
+
+function createBunStdinChunkReader(): () => Promise<string | null> {
   const reader = Bun.stdin.stream().getReader();
   const decoder = new TextDecoder();
-  let buf = "";
-  while (!buf.includes("\n")) {
+  return async () => {
     const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-  }
-  reader.releaseLock();
-  return buf.split("\n")[0] ?? "";
+    if (done) return null;
+    return decoder.decode(value, { stream: true });
+  };
 }
 
 function defaultGitStatus(root: string): "clean" | "dirty" | "not-git" {

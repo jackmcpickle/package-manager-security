@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { auditPath } from "../src/audit";
 import { createFsCache } from "../src/cache";
-import { run } from "../src/cli";
+import { createLineReader, run } from "../src/cli";
 import type { Finding } from "../src/domain";
 import { loadPolicy } from "../src/policy";
 
@@ -347,5 +347,13 @@ test("interactive -i uses default stdin prompt when none is injected", async () 
   expect(stdout.join("")).toMatch(/settings|advisories|both|skip/i);
   expect(Object.values(written).some((body) => body.includes("ignore-scripts=true"))).toBe(true);
   expect(result.exitCode).not.toBe(2);
+});
+
+test("stdin line reader keeps leftover lines after the first newline", async () => {
+  const chunks: Array<string | null> = ["settings\nskip\n"];
+  const readLine = createLineReader(async () => chunks.shift() ?? null);
+  expect(await readLine()).toBe("settings");
+  expect(await readLine()).toBe("skip");
+  expect(chunks).toEqual([]);
 });
 

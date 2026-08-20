@@ -196,6 +196,67 @@ test("apply advisories uses package currentVersion and fixVersion on the finding
   expect(result.skipped).toBeNull();
 });
 
+test("apply skips a package when current version is unknown", async () => {
+  const ran: string[][] = [];
+  const result = await applyAdvisories(
+    projectFor("npm"),
+    [
+      {
+        ...findingFor("npm"),
+        package: "left-pad",
+        fixVersion: "1.3.0",
+      },
+    ],
+    {
+      run: okRun(ran),
+      allowMajors: false,
+      currentVersions: {},
+      fixVersions: {},
+    },
+  );
+  expect(ran).toEqual([]);
+  expect(result.skipped).toBe("nothing");
+});
+
+test("apply uses the highest same-major fix across findings for one package", async () => {
+  const ran: string[][] = [];
+  const result = await applyAdvisories(
+    projectFor("npm"),
+    [
+      { ...findingFor("npm"), package: "left-pad", currentVersion: "1.0.0", fixVersion: "1.2.0" },
+      { ...findingFor("npm"), package: "left-pad", currentVersion: "1.0.0", fixVersion: "1.5.0" },
+      { ...findingFor("npm"), package: "left-pad", currentVersion: "1.0.0", fixVersion: "2.0.0" },
+    ],
+    {
+      run: okRun(ran),
+      allowMajors: false,
+      currentVersions: {},
+      fixVersions: {},
+    },
+  );
+  expect(ran).toEqual([["npm", "install", "left-pad@1.5.0", "--save-exact"]]);
+  expect(result.skipped).toBeNull();
+});
+
+test("apply uses the highest fix including majors when allowMajors is true", async () => {
+  const ran: string[][] = [];
+  const result = await applyAdvisories(
+    projectFor("npm"),
+    [
+      { ...findingFor("npm"), package: "left-pad", currentVersion: "1.0.0", fixVersion: "1.5.0" },
+      { ...findingFor("npm"), package: "left-pad", currentVersion: "1.0.0", fixVersion: "2.1.0" },
+    ],
+    {
+      run: okRun(ran),
+      allowMajors: true,
+      currentVersions: {},
+      fixVersions: {},
+    },
+  );
+  expect(ran).toEqual([["npm", "install", "left-pad@2.1.0", "--save-exact"]]);
+  expect(result.skipped).toBeNull();
+});
+
 test("apply advisories matches package identity not a message substring", async () => {
   const ran: string[][] = [];
   await applyAdvisories(
