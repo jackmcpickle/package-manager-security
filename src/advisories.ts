@@ -56,14 +56,17 @@ async function runPrimaries(
 
   for (const manager of primaries) {
     const lockfileBytes = manager.lockfilePath
-      ? (deps.readFile(manager.lockfilePath) ?? "")
-      : "";
-    const digest = deps.digest(lockfileBytes);
-    const cached = deps.cache.getLockfile(digest);
-    if (cached) {
-      fromCache = true;
-      findings.push(...cached.findings);
-      continue;
+      ? deps.readFile(manager.lockfilePath)
+      : null;
+    const canCacheLockfile = lockfileBytes !== null;
+    const digest = canCacheLockfile ? deps.digest(lockfileBytes) : null;
+    if (digest !== null) {
+      const cached = deps.cache.getLockfile(digest);
+      if (cached) {
+        fromCache = true;
+        findings.push(...cached.findings);
+        continue;
+      }
     }
 
     const argv = auditArgv(manager.name);
@@ -83,11 +86,13 @@ async function runPrimaries(
     const live = mapAuditJson(parsed, manager.name, manager.lockfilePath ?? manager.manifestPath);
     ranLive = true;
     findings.push(...live.findings);
-    deps.cache.putLockfile(digest, {
-      findings: live.findings,
-      fromCache: false,
-      ranLive: true,
-    });
+    if (digest !== null) {
+      deps.cache.putLockfile(digest, {
+        findings: live.findings,
+        fromCache: false,
+        ranLive: true,
+      });
+    }
     for (const entry of live.packages) {
       deps.cache.putPackage(entry.name, entry.version, entry.rows);
     }
@@ -237,7 +242,13 @@ function walkItem(
     return;
   }
 
-  if (Array.isArray(item.findings) || item.module_name !== undefined || item.advisory !== undefined) {
+  if (
+    Array.isArray(item.findings) ||
+    item.module_name !== undefined ||
+    item.advisory !== undefined ||
+    kind === "deprecated" ||
+    kind === "quarantine"
+  ) {
     const name = String(
       item.module_name ?? item.name ?? packageName(item.package) ?? "unknown",
     );
