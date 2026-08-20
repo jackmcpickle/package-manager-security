@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun test
+
+  create-release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create GitHub release if missing
+        run: gh release view "$GITHUB_REF_NAME" || gh release create "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  binaries:
+    needs: create-release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: bun-linux-x64
+            artifact: pmsec-linux-x64
+          - target: bun-linux-arm64
+            artifact: pmsec-linux-arm64
+          - target: bun-darwin-x64
+            artifact: pmsec-darwin-x64
+          - target: bun-darwin-arm64
+            artifact: pmsec-darwin-arm64
+          - target: bun-windows-x64
+            artifact: pmsec-windows-x64.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun build ./src/main.ts --compile --target=${{ matrix.target }} --outfile dist/${{ matrix.artifact }}
+      - name: Attach binary to release
+        run: gh release upload "$GITHUB_REF_NAME" "dist/${{ matrix.artifact }}" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  npm-publish:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - run: bun install --frozen-lockfile
+      - run: bun test
+      - run: bun run build
+      - run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

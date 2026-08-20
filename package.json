@@ -1,13 +1,42 @@
 {
-  "name": "pmsec",
+  "name": "@jackmcpickle/pmsec",
   "version": "0.1.0",
+  "description": "Audit package-manager security settings and advisories across monorepos and folders of projects. Supports npm, pnpm, yarn, bun, and uv.",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jackmcpickle/package-manager-security.git"
+  },
+  "keywords": [
+    "security",
+    "audit",
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun",
+    "uv",
+    "supply-chain",
+    "cli"
+  ],
   "bin": {
-    "pmsec": "./src/main.ts"
+    "pmsec": "./dist/pmsec.js"
+  },
+  "files": [
+    "dist/pmsec.js",
+    "README.md"
+  ],
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "test": "bun test",
-    "build": "bun build ./src/main.ts --compile --outfile dist/pmsec"
+    "build": "bun build ./src/main.ts --target=bun --banner '#!/usr/bin/env bun' --outfile dist/pmsec.js",
+    "build:binary": "bun build ./src/main.ts --compile --outfile dist/pmsec",
+    "prepublishOnly": "bun test && bun run build"
   },
   "dependencies": {
     "smol-toml": "^1.8.0"
