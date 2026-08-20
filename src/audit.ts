@@ -28,6 +28,7 @@ export function auditPath(
     applyAdvisories: boolean;
     interactive: boolean;
     concurrency: number;
+    flags?: { preset?: PresetName; overrides?: Record<string, unknown> };
     deps: {
       readFile: (path: string) => string | null;
       readDir: (dir: string) => string[];
@@ -36,7 +37,7 @@ export function auditPath(
     };
   },
 ): { exitCode: ExitCode; projects: Array<{ project: Project; findings: Finding[] }> } {
-  const { policy, apply, deps } = input;
+  const { policy, apply, deps, flags } = input;
   const discovered = discoverProjects(root, {
     readFile: deps.readFile,
     readDir: deps.readDir,
@@ -46,7 +47,7 @@ export function auditPath(
   let policyFailure = false;
   const projects = discovered.map((project) => {
     const repoToml = deps.readFile(join(project.root, ".pmsec.toml")) ?? undefined;
-    const projectPolicy = overlayRepoPolicy(policy, repoToml);
+    const projectPolicy = overlayRepoPolicy(policy, repoToml, flags);
     const findings = [
       ...auditSettings(project, projectPolicy, { readFile: deps.readFile }),
       ...preflight(project, { which: deps.which }).warnings,
@@ -63,7 +64,11 @@ export function auditPath(
   return { exitCode, projects };
 }
 
-function overlayRepoPolicy(base: Policy, repoToml: string | undefined): Policy {
+function overlayRepoPolicy(
+  base: Policy,
+  repoToml: string | undefined,
+  flags?: { preset?: PresetName; overrides?: Record<string, unknown> },
+): Policy {
   if (repoToml === undefined) return base;
   const repo = loadPolicy({ repoToml });
   let parsed: unknown;
@@ -73,17 +78,18 @@ function overlayRepoPolicy(base: Policy, repoToml: string | undefined): Policy {
     parsed = {};
   }
   const keys = isPlainObject(parsed) ? parsed : {};
+  const flagOverrides = flags?.overrides ?? {};
   const perManager: Policy["perManager"] = { ...base.perManager };
   for (const [name, table] of Object.entries(repo.perManager)) {
     const key = name as keyof Policy["perManager"];
-    perManager[key] = { ...perManager[key], ...table };
+    perManager[key] = { ...perManager[key], ...table, ...flagOverrides };
   }
   return {
-    preset: typeof keys.preset === "string" ? repo.preset : base.preset,
+    preset: flags?.preset ?? (typeof keys.preset === "string" ? repo.preset : base.preset),
     enabledManagers: Array.isArray(keys.enabledManagers)
       ? repo.enabledManagers
       : base.enabledManagers,
-    overrides: { ...base.overrides, ...repo.overrides },
+    overrides: { ...base.overrides, ...repo.overrides, ...flagOverrides },
     perManager,
   };
 }

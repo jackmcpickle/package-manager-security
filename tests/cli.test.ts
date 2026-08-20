@@ -28,3 +28,17 @@ test("audit of a fixture repo with open npm scripts exits 1 and lists the findin
   expect(result.exitCode).toBe(1);
   expect(stdout.join("")).toContain("scripts.unrestricted");
 });
+
+test("CLI --preset wins over repo .pmsec.toml preset", async () => {
+  const root = join(import.meta.dir, "fixtures/audit/flag-wins");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const result = await run(["audit", root, "--preset", "relaxed"], {
+    stdout: { write: (s: string) => stdout.push(s) },
+    stderr: { write: (s: string) => stderr.push(s) },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+  });
+  expect(stdout.join("")).not.toContain("scripts.unrestricted");
+  expect(result.exitCode).toBe(0);
+});

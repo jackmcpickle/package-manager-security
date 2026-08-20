@@ -47,6 +47,7 @@ export async function run(
     applyAdvisories: flags.applyAdvisories,
     interactive: flags.interactive,
     concurrency: flags.concurrency,
+    flags: flags.preset === undefined ? undefined : { preset: flags.preset },
     deps: {
       readFile,
       readDir,

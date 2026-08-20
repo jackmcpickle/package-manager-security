@@ -5,7 +5,7 @@ export function formatHuman(result: ReturnType<typeof auditPath>): string {
   const settingsCount = findings.filter((finding) => finding.kind !== "missing-binary").length;
   const warningsCount = findings.filter((finding) => finding.kind === "missing-binary").length;
   const lines = [
-    `repos scanned: ${result.projects.length}`,
+    `repos scanned: ${countRepos(result.projects)}`,
     `settings findings: ${settingsCount}`,
     `warnings: ${warningsCount}`,
   ];
@@ -17,4 +17,8 @@ export function formatHuman(result: ReturnType<typeof auditPath>): string {
     }
   }
   return `${lines.join("\n")}\n`;
+}
+
+function countRepos(projects: ReturnType<typeof auditPath>["projects"]): number {
+  return new Set(projects.map(({ project }) => project.gitRoot ?? project.root)).size;
 }

@@ -41,3 +41,20 @@ test("formatHuman includes repos scanned, settings findings count, and warnings 
   expect(text).toContain("warnings");
   expect(text).toContain("scripts.unrestricted");
 });
+
+test("formatHuman counts unique git roots as repos scanned", () => {
+  const text = formatHuman({
+    exitCode: 0,
+    projects: [
+      {
+        project: { root: "/repo/packages/a", gitRoot: "/repo", managers: [] },
+        findings: [],
+      },
+      {
+        project: { root: "/repo/packages/b", gitRoot: "/repo", managers: [] },
+        findings: [],
+      },
+    ],
+  });
+  expect(text).toContain("repos scanned: 1");
+});
