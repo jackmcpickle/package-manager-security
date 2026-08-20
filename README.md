@@ -83,6 +83,8 @@ bun install        # install dependencies
 bun test           # run the test suite
 ```
 
+CI runs on Buildkite (`.buildkite/pipeline.yml`): tests with coverage, lint, and the coverage ratchet.
+
 ### Build
 
 ```bash
