@@ -153,6 +153,49 @@ test("poetry project is detected and flagged as not using uv", () => {
   expect(findings.some((f) => f.code === "python.not-uv")).toBe(true);
 });
 
+test("nested poetry.lock is a separate PM root", () => {
+  const projects = discoverProjects(
+    "/mono",
+    memoryFs(
+      {
+        "/mono/package.json": `{"name":"mono"}`,
+        "/mono/package-lock.json": `{"lockfileVersion":3}`,
+        "/mono/services/api/pyproject.toml": `[tool.poetry]\nname = "api"\n`,
+        "/mono/services/api/poetry.lock": "# poetry\n",
+      },
+      ["/mono/.git"],
+    ),
+  );
+  const api = projects.find((p) => p.root.endsWith("api"));
+  expect(api?.gitRoot?.endsWith("mono")).toBe(true);
+  expect(api?.managers.some((m) => m.name === "poetry" && m.role === "primary")).toBe(true);
+});
+
+test("pipenv stays primary when uv is also present", () => {
+  const projects = discoverProjects(
+    "/both",
+    memoryFs({
+      "/both/pyproject.toml": "[project]\nname = \"x\"\n[tool.uv]\n",
+      "/both/uv.lock": "x\n",
+      "/both/Pipfile": "[packages]\n",
+      "/both/Pipfile.lock": "{}\n",
+    }),
+  );
+  expect(projects[0]?.managers.some((m) => m.name === "uv" && m.role === "primary")).toBe(true);
+  expect(projects[0]?.managers.some((m) => m.name === "pipenv" && m.role === "primary")).toBe(true);
+});
+
+test("commented [tool.poetry] is not poetry", () => {
+  const projects = discoverProjects(
+    "/commented",
+    memoryFs({
+      "/commented/pyproject.toml": "# [tool.poetry]\n# [project]\nname = \"x\"\n",
+    }),
+  );
+  expect(projects.some((p) => p.managers.some((m) => m.name === "poetry"))).toBe(false);
+  expect(projects.some((p) => p.managers.some((m) => m.name === "pip"))).toBe(false);
+});
+
 test("skip directories are not walked for repos or PM roots", () => {
   const projects = discoverProjects(
     "/root",

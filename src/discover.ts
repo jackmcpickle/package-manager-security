@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { parse as parseToml } from "smol-toml";
 import type { DetectedManager, ManagerRole, PackageManager, Project } from "./domain";
 
 export type DiscoverFs = {
@@ -153,22 +154,47 @@ function hasRootPmMarkers(dir: string, fs: Fs): boolean {
 
 function hasNestedConfig(dir: string, fs: Fs): boolean {
   const names = new Set(fs.readDir(dir));
-  return NESTED_CONFIGS.some((name) => names.has(name));
+  if (NESTED_CONFIGS.some((name) => names.has(name))) return true;
+  if (
+    names.has("poetry.lock") ||
+    names.has("Pipfile") ||
+    names.has("Pipfile.lock") ||
+    hasRequirementsTxt(names)
+  ) {
+    return true;
+  }
+  return hasToolPoetry(dir, fs) || hasProjectTable(dir, fs);
+}
+
+function readPyproject(dir: string, fs: Fs): Record<string, unknown> | null {
+  const raw = fs.readFile(join(dir, "pyproject.toml"));
+  if (raw === null) return null;
+  try {
+    const parsed: unknown = parseToml(raw);
+    return isPlainObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasToolTable(dir: string, fs: Fs, name: string): boolean {
+  const pyproject = readPyproject(dir, fs);
+  if (pyproject === null) return false;
+  const tool = pyproject["tool"];
+  return isPlainObject(tool) && name in tool;
 }
 
 function hasToolUv(dir: string, fs: Fs): boolean {
-  const pyproject = fs.readFile(join(dir, "pyproject.toml"));
-  return pyproject !== null && /\[tool\.uv\b/.test(pyproject);
+  return hasToolTable(dir, fs, "uv");
 }
 
 function hasToolPoetry(dir: string, fs: Fs): boolean {
-  const pyproject = fs.readFile(join(dir, "pyproject.toml"));
-  return pyproject !== null && /\[tool\.poetry\b/.test(pyproject);
+  return hasToolTable(dir, fs, "poetry");
 }
 
 function hasProjectTable(dir: string, fs: Fs): boolean {
-  const pyproject = fs.readFile(join(dir, "pyproject.toml"));
-  return pyproject !== null && /\[project\b/.test(pyproject);
+  const pyproject = readPyproject(dir, fs);
+  return pyproject !== null && "project" in pyproject;
 }
 
 function hasRequirementsTxt(names: Set<string>): boolean {
@@ -199,7 +225,7 @@ function detectManagers(dir: string, fs: Fs): DetectedManager[] {
   if (uv) managers.push(uv);
   const poetry = detectPoetry(dir, names, fs, uv !== null);
   if (poetry) managers.push(poetry);
-  const pipenv = detectPipenv(dir, names, uv !== null);
+  const pipenv = detectPipenv(dir, names);
   if (pipenv) managers.push(pipenv);
   const pip = detectPip(dir, names, fs, uv !== null, poetry !== null, pipenv !== null);
   if (pip) managers.push(pip);
@@ -352,15 +378,11 @@ function detectPoetry(
   );
 }
 
-function detectPipenv(
-  dir: string,
-  names: Set<string>,
-  uvPresent: boolean,
-): DetectedManager | null {
+function detectPipenv(dir: string, names: Set<string>): DetectedManager | null {
   if (!names.has("Pipfile") && !names.has("Pipfile.lock")) return null;
   return manager(
     "pipenv",
-    uvPresent ? "leftover" : "primary",
+    "primary",
     names.has("Pipfile") ? join(dir, "Pipfile") : join(dir, "Pipfile.lock"),
     names.has("Pipfile.lock") ? join(dir, "Pipfile.lock") : null,
     names.has("Pipfile") ? join(dir, "Pipfile") : null,
