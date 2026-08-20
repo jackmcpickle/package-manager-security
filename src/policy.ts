@@ -33,12 +33,16 @@ const DEFAULT_ENABLED_MANAGERS: PackageManager[] = [
   "uv",
 ];
 
-const PACKAGE_MANAGERS = new Set<string>([
+const CONFIG_MANAGERS = new Set<string>([
   "npm",
   "pnpm",
   "yarn",
   "bun",
   "uv",
+]);
+
+const PACKAGE_MANAGERS = new Set<string>([
+  ...CONFIG_MANAGERS,
   "poetry",
   "pip",
   "pipenv",
@@ -73,19 +77,18 @@ export function loadPolicy(input: {
     }
   }
 
+  const flagOverrides = input.flags?.overrides ?? {};
   if (input.flags?.preset !== undefined) {
     preset = input.flags.preset;
   }
-  if (input.flags?.overrides !== undefined) {
-    overrides = { ...overrides, ...input.flags.overrides };
-  }
+  overrides = { ...overrides, ...flagOverrides };
 
   const perManager: Policy["perManager"] = {};
   for (const [name, table] of Object.entries(tables) as [
     PackageManager,
     Record<string, unknown>,
   ][]) {
-    perManager[name] = { ...overrides, ...table };
+    perManager[name] = { ...overrides, ...table, ...flagOverrides };
   }
 
   return { preset, enabledManagers, overrides, perManager };
@@ -113,7 +116,7 @@ function parseLayer(toml: string): {
       enabledManagers = value.filter(isPackageManager);
       continue;
     }
-    if (isPackageManager(key) && isPlainObject(value)) {
+    if (isConfigManager(key) && isPlainObject(value)) {
       perManager[key] = { ...value };
       continue;
     }
@@ -127,6 +130,10 @@ function parseLayer(toml: string): {
 
 function isPresetName(value: unknown): value is PresetName {
   return value === "relaxed" || value === "standard" || value === "strict";
+}
+
+function isConfigManager(value: unknown): value is PackageManager {
+  return typeof value === "string" && CONFIG_MANAGERS.has(value);
 }
 
 function isPackageManager(value: unknown): value is PackageManager {
