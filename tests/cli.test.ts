@@ -381,6 +381,61 @@ test("interactive -i uses default stdin prompt when none is injected", async () 
   expect(result.exitCode).not.toBe(2);
 });
 
+test("auditPath advisory runner dying yields exit code 2 (incomplete)", async () => {
+  const fs = memoryFs(CLEAN_NPM_FILES, ["/p/.git"]);
+  const result = await auditPath("/p", {
+    policy: loadPolicy({}),
+    apply: false,
+    applyAdvisories: false,
+    interactive: false,
+    concurrency: 4,
+    deps: {
+      ...fs,
+      which: () => "/usr/bin/npm",
+      run: async () => ({ code: 2, stdout: "", stderr: "audit engine crashed" }),
+      cache: createFsCache(join(cacheDir, "incomplete"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+      digest: () => "npm-incomplete",
+    },
+  });
+  expect(result.exitCode).toBe(2);
+});
+
+test("auditPath below-gate advisory does not fail the standard preset gate", async () => {
+  const fs = memoryFs(CLEAN_NPM_FILES, ["/p/.git"]);
+  const LOW_NPM_AUDIT = JSON.stringify({
+    advisories: {
+      "1": {
+        module_name: "left-pad",
+        severity: "low",
+        github_advisory_id: "GHSA-low",
+        title: "left-pad low advisory",
+        findings: [{ version: "1.0.0" }],
+      },
+    },
+  });
+  const result = await auditPath("/p", {
+    policy: loadPolicy({}),
+    apply: false,
+    applyAdvisories: false,
+    interactive: false,
+    concurrency: 4,
+    deps: {
+      ...fs,
+      which: () => "/usr/bin/npm",
+      run: async () => ({ code: 1, stdout: LOW_NPM_AUDIT, stderr: "" }),
+      cache: createFsCache(join(cacheDir, "below-gate"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+      digest: () => "npm-below-gate",
+    },
+  });
+  const findings = result.projects.flatMap((row) => row.findings);
+  expect(findings.some((finding) => finding.kind === "advisory" && finding.severity === "low")).toBe(
+    true,
+  );
+  expect(result.exitCode).toBe(0);
+});
+
 test("stdin line reader keeps leftover lines after the first newline", async () => {
   const chunks: Array<string | null> = ["settings\nskip\n"];
   const readLine = createLineReader(async () => chunks.shift() ?? null);

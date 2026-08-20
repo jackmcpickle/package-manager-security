@@ -14,6 +14,7 @@ const cacheDir4 = mkdtempSync(join(tmpdir(), "pmsec-test-cache4-"));
 const cacheDir5 = mkdtempSync(join(tmpdir(), "pmsec-test-cache5-"));
 const cacheDir6 = mkdtempSync(join(tmpdir(), "pmsec-test-cache6-"));
 const cacheDir7 = mkdtempSync(join(tmpdir(), "pmsec-test-cache7-"));
+const cacheDir8 = mkdtempSync(join(tmpdir(), "pmsec-test-cache8-"));
 
 afterAll(() => {
   rmSync(cacheDir1, { recursive: true, force: true });
@@ -23,6 +24,7 @@ afterAll(() => {
   rmSync(cacheDir5, { recursive: true, force: true });
   rmSync(cacheDir6, { recursive: true, force: true });
   rmSync(cacheDir7, { recursive: true, force: true });
+  rmSync(cacheDir8, { recursive: true, force: true });
 });
 
 const project: Project = {
@@ -457,4 +459,229 @@ test("poetry primary uses runOsv when provided", async () => {
     },
   });
   expect(result.findings.some((f) => f.kind === "advisory" && f.severity === "high")).toBe(true);
+});
+
+test("pnpm primary runs `pnpm audit --json` and parses a high advisory", async () => {
+  const cache = createFsCache(join(cacheDir8, "pnpm"), () => 1_000, 86_400_000);
+  const calls: string[][] = [];
+  const pnpmProject: Project = {
+    root: "/pn",
+    gitRoot: "/pn",
+    managers: [
+      {
+        name: "pnpm",
+        role: "primary",
+        manifestPath: "/pn/package.json",
+        lockfilePath: "/pn/pnpm-lock.yaml",
+        configPath: "/pn/pnpm-workspace.yaml",
+      },
+    ],
+  };
+  // pnpm's `pnpm audit --json` mirrors npm's classic (v6-style) advisory
+  // report: a top-level `advisories` map keyed by numeric advisory id.
+  const result = await auditAdvisories(pnpmProject, loadPolicy({}), {
+    cache,
+    now: () => 1_000,
+    digest: () => "pnpm-digest",
+    readFile: () => "lock",
+    run: async (argv, cwd) => {
+      calls.push(argv);
+      expect(cwd).toBe("/pn");
+      return {
+        code: 1,
+        stdout: JSON.stringify({
+          advisories: {
+            "1092": {
+              module_name: "minimatch",
+              severity: "high",
+              github_advisory_id: "GHSA-pnpm-high",
+              title: "minimatch high advisory",
+              findings: [{ version: "3.0.0" }],
+              fixAvailable: { name: "minimatch", version: "3.0.5" },
+            },
+          },
+          metadata: { vulnerabilities: { high: 1 } },
+        }),
+        stderr: "",
+      };
+    },
+  });
+  expect(calls).toEqual([["pnpm", "audit", "--json"]]);
+  const advisory = result.findings.find((f) => f.kind === "advisory");
+  expect(advisory?.severity).toBe("high");
+  expect(advisory?.package).toBe("minimatch");
+});
+
+test("bun primary runs `bun audit --json` and parses a critical advisory", async () => {
+  const cache = createFsCache(join(cacheDir8, "bun"), () => 1_000, 86_400_000);
+  const calls: string[][] = [];
+  const bunProject: Project = {
+    root: "/bn",
+    gitRoot: "/bn",
+    managers: [
+      {
+        name: "bun",
+        role: "primary",
+        manifestPath: "/bn/package.json",
+        lockfilePath: "/bn/bun.lock",
+        configPath: "/bn/bunfig.toml",
+      },
+    ],
+  };
+  // bun's `bun audit --json` mirrors npm's v7+ advisory report: a
+  // `vulnerabilities` map keyed by package name, each with a `via` array.
+  const result = await auditAdvisories(bunProject, loadPolicy({}), {
+    cache,
+    now: () => 1_000,
+    digest: () => "bun-digest",
+    readFile: () => "lock",
+    run: async (argv, cwd) => {
+      calls.push(argv);
+      expect(cwd).toBe("/bn");
+      return {
+        code: 1,
+        stdout: JSON.stringify({
+          auditReportVersion: 2,
+          vulnerabilities: {
+            "ansi-html": {
+              name: "ansi-html",
+              severity: "critical",
+              range: "<0.0.8",
+              via: [
+                {
+                  github_advisory_id: "GHSA-bun-crit",
+                  title: "ansi-html critical advisory",
+                  severity: "critical",
+                },
+              ],
+              fixAvailable: { name: "ansi-html", version: "0.0.8" },
+            },
+          },
+        }),
+        stderr: "",
+      };
+    },
+  });
+  expect(calls).toEqual([["bun", "audit", "--json"]]);
+  const advisory = result.findings.find((f) => f.kind === "advisory");
+  expect(advisory?.severity).toBe("critical");
+  expect(advisory?.package).toBe("ansi-html");
+  expect(advisory?.fixVersion).toBe("0.0.8");
+});
+
+test("yarn berry primary runs `yarn npm audit --json` and parses a high advisory", async () => {
+  const cache = createFsCache(join(cacheDir8, "yarn"), () => 1_000, 86_400_000);
+  const calls: string[][] = [];
+  const yarnProject: Project = {
+    root: "/yn",
+    gitRoot: "/yn",
+    managers: [
+      {
+        name: "yarn",
+        role: "primary",
+        manifestPath: "/yn/package.json",
+        lockfilePath: "/yn/yarn.lock",
+        configPath: "/yn/.yarnrc.yml",
+      },
+    ],
+  };
+  // Yarn Berry's `yarn npm audit --json` emits one tree-reporter node per
+  // vulnerability: `{ value: <package>, children: { ID, Issue, Severity, ... } }`.
+  const result = await auditAdvisories(yarnProject, loadPolicy({}), {
+    cache,
+    now: () => 1_000,
+    digest: () => "yarn-digest",
+    readFile: () => "lock",
+    run: async (argv, cwd) => {
+      calls.push(argv);
+      expect(cwd).toBe("/yn");
+      return {
+        code: 1,
+        stdout: JSON.stringify({
+          value: "browserify-sign",
+          children: {
+            ID: 1094464,
+            Issue: "browserify-sign upper bound check issue in dsaVerify",
+            URL: "https://github.com/advisories/GHSA-x9w5-v3q2-3rhw",
+            Severity: "high",
+            "Vulnerable Versions": ">=2.6.0 <=4.2.1",
+            "Tree Versions": ["4.2.1"],
+            Dependents: ["root-workspace-0b6124@workspace:."],
+          },
+        }),
+        stderr: "",
+      };
+    },
+  });
+  expect(calls).toEqual([["yarn", "npm", "audit", "--json"]]);
+  const advisory = result.findings.find((f) => f.kind === "advisory");
+  expect(advisory?.severity).toBe("high");
+  expect(advisory?.package).toBe("browserify-sign");
+  expect(advisory?.code).toBe("1094464");
+});
+
+test("advisory runner dying (non 0/1 exit code) throws an incomplete-tagged error", async () => {
+  const cache = createFsCache(join(cacheDir8, "incomplete"), () => 1_000, 86_400_000);
+  const deadProject: Project = {
+    root: "/dead",
+    gitRoot: "/dead",
+    managers: [
+      {
+        name: "npm",
+        role: "primary",
+        manifestPath: "/dead/package.json",
+        lockfilePath: "/dead/package-lock.json",
+        configPath: "/dead/.npmrc",
+      },
+    ],
+  };
+  const deps = {
+    cache,
+    now: () => 1_000,
+    digest: () => "dead-digest",
+    readFile: () => "lock",
+    run: async () => ({ code: 2, stdout: "", stderr: "audit engine crashed" }),
+  };
+  let caught: unknown;
+  try {
+    await auditAdvisories(deadProject, loadPolicy({}), deps);
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(Error);
+  expect((caught as { incomplete?: boolean }).incomplete).toBe(true);
+});
+
+test("advisory runner throwing also surfaces an incomplete-tagged error", async () => {
+  const cache = createFsCache(join(cacheDir8, "throws"), () => 1_000, 86_400_000);
+  const throwsProject: Project = {
+    root: "/throws",
+    gitRoot: "/throws",
+    managers: [
+      {
+        name: "npm",
+        role: "primary",
+        manifestPath: "/throws/package.json",
+        lockfilePath: "/throws/package-lock.json",
+        configPath: "/throws/.npmrc",
+      },
+    ],
+  };
+  const deps = {
+    cache,
+    now: () => 1_000,
+    digest: () => "throws-digest",
+    readFile: () => "lock",
+    run: async () => {
+      throw new Error("ENOENT: npm not found");
+    },
+  };
+  let caught: unknown;
+  try {
+    await auditAdvisories(throwsProject, loadPolicy({}), deps);
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(Error);
+  expect((caught as { incomplete?: boolean }).incomplete).toBe(true);
 });

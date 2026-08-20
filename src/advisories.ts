@@ -149,6 +149,19 @@ function parseJson(stdout: string): unknown {
   try {
     return JSON.parse(stdout);
   } catch {
+    // Yarn Berry's `yarn npm audit --json` emits newline-delimited JSON
+    // (one advisory object per line) rather than a single JSON document.
+    const lines = stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    if (lines.length > 1) {
+      try {
+        return lines.map((line) => JSON.parse(line));
+      } catch {
+        throw incompleteError();
+      }
+    }
     throw incompleteError();
   }
 }
@@ -203,6 +216,15 @@ function mapAuditJson(
   }
 
   const obj = parsed as Record<string, unknown>;
+
+  // Yarn Berry's `yarn npm audit --json` tree-reporter shape: a single
+  // `{ value, children }` node (one per ndjson line, already unwrapped above
+  // when there were multiple lines).
+  if (typeof obj.value === "string" && isPlainObject(obj.children)) {
+    walkItem(obj, push);
+    return { findings, packages: [...packages.values()] };
+  }
+
   if (isPlainObject(obj.advisories)) {
     for (const value of Object.values(obj.advisories)) walkItem(value, push);
   }
@@ -234,6 +256,29 @@ function walkItem(
   ) => void,
 ): void {
   if (!isPlainObject(item)) return;
+
+  if (typeof item.value === "string" && isPlainObject(item.children)) {
+    const name = item.value;
+    const children = item.children;
+    const rawId = children.ID;
+    const id =
+      typeof rawId === "number" || typeof rawId === "string"
+        ? String(rawId)
+        : advisoryId(children);
+    const severity = asSeverity(children.Severity ?? children.severity);
+    const message = String(
+      children.Issue ?? children.issue ?? `${name} ${severity} advisory`,
+    );
+    const treeVersions = children["Tree Versions"];
+    const version =
+      Array.isArray(treeVersions) && typeof treeVersions[0] === "string"
+        ? (concreteVersion(treeVersions[0]) ?? "unknown")
+        : "unknown";
+    const patched = children["Patched Versions"];
+    const fix = typeof patched === "string" ? versionFromRange(patched) : undefined;
+    push(name, version, severity, id, message, "advisory", fix);
+    return;
+  }
 
   const status = String(item.status ?? "").toLowerCase();
   const kind: FindingKind =
