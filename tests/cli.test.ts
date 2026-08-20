@@ -694,6 +694,43 @@ test("interactive skip writes nothing", async () => {
   expect(result.exitCode).toBe(1);
 });
 
+test("interactive poetry does not offer migrate-to-uv and still uses OSV", async () => {
+  mkdirSync(join(import.meta.dir, "fixtures/discover/poetry-app/.git"), { recursive: true });
+  const root = join(import.meta.dir, "fixtures/discover/poetry-app");
+  const stdout: string[] = [];
+  const calls: string[][] = [];
+  const written: string[] = [];
+  let osvLock: string | undefined;
+  const result = await run(["audit", root, "-i"], {
+    stdout: { write: (s: string) => stdout.push(s) },
+    stderr: { write: () => undefined },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: async (argv) => {
+      calls.push(argv);
+      return { code: 0, stdout: "{}", stderr: "" };
+    },
+    runOsv: async (lockOrRequirements) => {
+      osvLock = lockOrRequirements;
+      return [];
+    },
+    which: () => "/usr/bin/uv",
+    cache: createFsCache(join(cacheDir, "no-migrate-i"), () => 1_000, 86_400_000),
+    writeFile: (path) => {
+      written.push(path);
+    },
+    gitStatus: () => "clean",
+    readLine: async () => "skip",
+  });
+  const out = stdout.join("");
+  expect(out).toMatch(/settings|advisories|both|skip/i);
+  expect(out).not.toMatch(/migrate/i);
+  expect(osvLock).toContain("poetry.lock");
+  expect(calls.every((argv) => argv[0] !== "uv")).toBe(true);
+  expect(written.some((path) => path.endsWith("uv.toml") || path.endsWith("uv.lock"))).toBe(false);
+  expect(result.exitCode).toBe(1);
+});
+
 test("--apply on a poetry project never runs uv migrate commands", async () => {
   mkdirSync(join(import.meta.dir, "fixtures/discover/poetry-app/.git"), { recursive: true });
   const root = join(import.meta.dir, "fixtures/discover/poetry-app");

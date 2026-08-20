@@ -1,6 +1,6 @@
 # pmsec Testing Plan
 
-> Audit of the current suite (2026-08-20, `feat/pmsec`, 215 tests / 11 files). Waves 1–2 are done. Tests stay at the eight seams in `PLAN.md`. Do not mock our own modules. Inject filesystem, PATH, runners, time, and cache dir.
+> Audit of the current suite (2026-08-20, `feat/pmsec`, 217 tests / 12 files). Waves 1–3 are done. Tests stay at the eight seams in `PLAN.md`. Do not mock our own modules. Inject filesystem, PATH, runners, time, and cache dir.
 
 **Goal:** Every product scenario from the grilling / `PLAN.md` has a named test at exactly one layer. No duplicate coverage across layers.
 
@@ -20,7 +20,7 @@
 
 **Critical path that is already tested:** audit never writes by default; `--apply` writes npm/pnpm correctly; leftover is not fixable; yarn v1 is unsupported; Python not-uv; missing binary does not fail the run; cache TTL + refresh; no major bump; settings+advisories after self-dirty; unique git-root counts; flags beat repo TOML.
 
-**Critical path that is not tested (Wave 3+):** interactive migrate-to-uv (feature stub); compiled-binary smoke.
+**Critical path that is not tested (Wave 4):** coverage ratchet in CI.
 
 ## 2. Recommended pyramid
 
@@ -204,7 +204,7 @@ Preset severity:
 | C16 | `--concurrency 1` serial; default 4; bad value → 4 | done |
 | C17 | `--force` and `--commit` parsed through `run()` | done |
 | C18 | Interactive skip writes nothing | done |
-| C19 | Interactive migrate-to-uv offer: yes converts, no uses OSV | **add W3** (feature may be stub) |
+| C19 | Interactive migrate-to-uv offer: yes converts, no uses OSV | done (stub: no offer, OSV still runs) |
 | C20 | Human summary: repos, settings count, warnings, advisories by severity | done |
 
 ### 3.9 Out of this plan
@@ -224,11 +224,11 @@ Preset severity:
 
 ### Wave 2 — hardening (done)
 
-215 tests, 0 fail. Remaining work is Wave 3+.
+215 tests, 0 fail.
 
-### Wave 3 — product leftovers
+### Wave 3 — product leftovers (done)
 
-Interactive migrate-to-uv (only if implemented). One compiled-binary smoke: `bun run build && ./dist/pmsec audit tests/fixtures/discover/many-repos`.
+Migrate-to-uv is not implemented: interactive poetry does not offer migrate and still uses OSV. Compiled-binary smoke: `bun run build:binary && ./dist/pmsec audit tests/fixtures/discover/many-repos --json`.
 
 ### Wave 4 — ratchet (CI, later)
 
