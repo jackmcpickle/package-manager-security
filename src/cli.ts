@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { auditPath, defaultDigest, type AuditRun } from "./audit";
 import { CACHE_TTL_MS, createFsCache, type Cache } from "./cache";
@@ -19,6 +19,9 @@ export async function run(
     cache?: Cache;
     now?: () => number;
     digest?: (lockfileBytes: string) => string;
+    writeFile?: (path: string, body: string) => void;
+    gitStatus?: (root: string) => "clean" | "dirty" | "not-git";
+    gitCommit?: (root: string, message: string) => void;
   },
 ): Promise<{ exitCode: ExitCode }> {
   const stdout = deps?.stdout ?? process.stdout;
@@ -32,9 +35,6 @@ export async function run(
   }
 
   const flags = parseAuditArgs(argv.slice(1));
-  if (flags.apply) {
-    stderr.write("apply is not implemented\n");
-  }
 
   const root = flags.path === undefined
     ? cwd
@@ -56,6 +56,8 @@ export async function run(
     interactive: flags.interactive,
     concurrency: flags.concurrency,
     flags: flags.preset === undefined ? undefined : { preset: flags.preset },
+    force: flags.force,
+    commit: flags.commit,
     deps: {
       readFile,
       readDir,
@@ -66,6 +68,9 @@ export async function run(
       cache: deps?.cache ?? createFsCache(userCachePath(env), now, CACHE_TTL_MS),
       now,
       digest: deps?.digest ?? defaultDigest,
+      writeFile: deps?.writeFile ?? writeFile,
+      gitStatus: deps?.gitStatus ?? defaultGitStatus,
+      gitCommit: deps?.gitCommit ?? defaultGitCommit,
     },
   });
 
@@ -81,6 +86,8 @@ function parseAuditArgs(args: string[]): {
   interactive: boolean;
   concurrency: number;
   json: boolean;
+  force: boolean;
+  commit: boolean;
 } {
   let path: string | undefined;
   let preset: PresetName | undefined;
@@ -89,6 +96,8 @@ function parseAuditArgs(args: string[]): {
   let interactive = false;
   let concurrency = 4;
   let json = false;
+  let force = false;
+  let commit = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
@@ -98,6 +107,14 @@ function parseAuditArgs(args: string[]): {
     }
     if (arg === "--apply-advisories") {
       applyAdvisories = true;
+      continue;
+    }
+    if (arg === "--force") {
+      force = true;
+      continue;
+    }
+    if (arg === "--commit") {
+      commit = true;
       continue;
     }
     if (arg === "-i" || arg === "--interactive") {
@@ -130,8 +147,6 @@ function parseAuditArgs(args: string[]): {
     }
     if (
       arg === "--sarif" ||
-      arg === "--force" ||
-      arg === "--commit" ||
       arg === "--refresh" ||
       arg === "--no-cache" ||
       arg === "--allow-majors"
@@ -147,7 +162,26 @@ function parseAuditArgs(args: string[]): {
     }
   }
 
-  return { path, preset, apply, applyAdvisories, interactive, concurrency, json };
+  return { path, preset, apply, applyAdvisories, interactive, concurrency, json, force, commit };
+}
+
+function writeFile(path: string, body: string): void {
+  writeFileSync(path, body);
+}
+
+function defaultGitStatus(root: string): "clean" | "dirty" | "not-git" {
+  const proc = Bun.spawnSync(["git", "-C", root, "status", "--porcelain"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) return "not-git";
+  const stdout = new TextDecoder().decode(proc.stdout).trim();
+  return stdout === "" ? "clean" : "dirty";
+}
+
+function defaultGitCommit(root: string, message: string): void {
+  Bun.spawnSync(["git", "-C", root, "add", "-A"], { stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync(["git", "-C", root, "commit", "-m", message], { stdout: "pipe", stderr: "pipe" });
 }
 
 async function defaultRun(

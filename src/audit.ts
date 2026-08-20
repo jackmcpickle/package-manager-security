@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { parse } from "smol-toml";
 import { auditAdvisories } from "./advisories";
+import { applySettings } from "./apply-settings";
 import type { Cache } from "./cache";
 import { CACHE_TTL_MS, createFsCache } from "./cache";
 import { discoverProjects } from "./discover";
@@ -43,6 +44,8 @@ export async function auditPath(
     interactive: boolean;
     concurrency: number;
     flags?: { preset?: PresetName; overrides?: Record<string, unknown> };
+    force?: boolean;
+    commit?: boolean;
     deps: {
       readFile: (path: string) => string | null;
       readDir: (dir: string) => string[];
@@ -53,6 +56,9 @@ export async function auditPath(
       cache?: Cache;
       now?: () => number;
       digest?: (lockfileBytes: string) => string;
+      writeFile?: (path: string, body: string) => void;
+      gitStatus?: (root: string) => "clean" | "dirty" | "not-git";
+      gitCommit?: (root: string, message: string) => void;
     };
   },
 ): Promise<AuditResult> {
@@ -68,6 +74,7 @@ export async function auditPath(
 
   let policyFailure = false;
   let incomplete = false;
+  let applySkippedDirty = false;
   const projects: AuditResult["projects"] = [];
 
   for (const project of discovered) {
@@ -99,13 +106,25 @@ export async function auditPath(
       else throw error;
     }
 
+    if (apply && deps.writeFile && deps.gitStatus) {
+      const applied = applySettings(project, findings, projectPolicy, {
+        readFile: deps.readFile,
+        writeFile: deps.writeFile,
+        gitStatus: deps.gitStatus,
+        gitCommit: deps.gitCommit,
+        force: input.force ?? false,
+        commit: input.commit ?? false,
+      });
+      if (applied.skipped === "dirty") applySkippedDirty = true;
+    }
+
     const gate = GATE_RANK[projectPolicy.preset];
     if (findings.some((finding) => failsGate(finding, gate))) policyFailure = true;
     projects.push({ project, findings });
   }
 
   let exitCode: ExitCode = 0;
-  if (projects.length === 0 || apply || incomplete) exitCode = 2;
+  if (projects.length === 0 || incomplete || applySkippedDirty) exitCode = 2;
   else if (policyFailure) exitCode = 1;
 
   return { exitCode, projects };

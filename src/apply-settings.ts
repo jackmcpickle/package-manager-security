@@ -1,0 +1,342 @@
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import type { DetectedManager, Finding, PackageManager, Policy, Project } from "./domain";
+import { PRESET_DEFAULTS } from "./policy";
+
+export interface ApplyResult {
+  written: string[];
+  skipped: "dirty" | "nothing" | null;
+  committed: boolean;
+}
+
+export type ApplySettingsDeps = {
+  readFile: (path: string) => string | null;
+  writeFile: (path: string, body: string) => void;
+  gitStatus: (root: string) => "clean" | "dirty" | "not-git";
+  gitCommit?: (root: string, message: string) => void;
+  force: boolean;
+  commit: boolean;
+};
+
+type ResolvedSettings = {
+  minReleaseAgeDays: number;
+  auditLevel: string;
+};
+
+const DEFAULT_REGISTRY = "https://registry.npmjs.org/";
+
+export function applySettings(
+  project: Project,
+  findings: Finding[],
+  policy: Policy,
+  deps: ApplySettingsDeps,
+): ApplyResult {
+  const gitRoot = project.gitRoot ?? project.root;
+  if (deps.gitStatus(gitRoot) === "dirty" && !deps.force) {
+    return { written: [], skipped: "dirty", committed: false };
+  }
+
+  const targets = collectTargets(project, findings, deps.readFile);
+  if (targets.size === 0) {
+    return { written: [], skipped: "nothing", committed: false };
+  }
+
+  const written: string[] = [];
+  for (const [path, target] of targets) {
+    const next = renderConfig(
+      target.manager,
+      deps.readFile(path) ?? "",
+      target.codes,
+      resolveSettings(policy, target.manager),
+    );
+    deps.writeFile(path, next);
+    written.push(path);
+  }
+
+  let committed = false;
+  if (deps.commit && deps.gitCommit && written.length > 0 && deps.gitStatus(gitRoot) !== "not-git") {
+    deps.gitCommit(gitRoot, "chore: apply pmsec security settings");
+    committed = true;
+  }
+
+  return { written, skipped: null, committed };
+}
+
+function collectTargets(
+  project: Project,
+  findings: Finding[],
+  readFile: (path: string) => string | null,
+): Map<string, { manager: PackageManager; codes: Set<string> }> {
+  const targets = new Map<string, { manager: PackageManager; codes: Set<string> }>();
+
+  for (const finding of findings) {
+    if (!finding.fixable || finding.kind !== "settings") continue;
+    if (finding.code === "lockfile.missing" || finding.code === "pm.unpinned") continue;
+    const name = finding.manager;
+    if (name === undefined) continue;
+    const manager = project.managers.find((row) => row.name === name && row.role === "primary");
+    if (manager === undefined) continue;
+
+    const path = configPathFor(project, manager, readFile);
+    if (path === null || isForbiddenWrite(path, project.root)) continue;
+
+    const entry = targets.get(path) ?? { manager: name, codes: new Set<string>() };
+    entry.codes.add(finding.code);
+    targets.set(path, entry);
+  }
+
+  return targets;
+}
+
+function configPathFor(
+  project: Project,
+  manager: DetectedManager,
+  readFile: (path: string) => string | null,
+): string | null {
+  switch (manager.name) {
+    case "npm":
+      return localPath(project.root, ".npmrc");
+    case "pnpm":
+      return localPath(project.root, "pnpm-workspace.yaml");
+    case "yarn":
+      return localPath(project.root, ".yarnrc.yml");
+    case "bun":
+      return localPath(project.root, "bunfig.toml");
+    case "uv":
+      return uvConfigPath(project, manager, readFile);
+    default:
+      return null;
+  }
+}
+
+function uvConfigPath(
+  project: Project,
+  manager: DetectedManager,
+  readFile: (path: string) => string | null,
+): string {
+  const uvToml = localPath(project.root, "uv.toml");
+  if (readFile(uvToml) !== null) return uvToml;
+  const pyproject = localPath(project.root, "pyproject.toml");
+  if (
+    manager.configPath !== null &&
+    isInside(manager.configPath, project.root) &&
+    manager.configPath.endsWith("pyproject.toml")
+  ) {
+    return manager.configPath;
+  }
+  const raw = readFile(pyproject);
+  if (raw !== null && hasToolUv(raw)) return pyproject;
+  return uvToml;
+}
+
+function renderConfig(
+  manager: PackageManager,
+  raw: string,
+  codes: Set<string>,
+  settings: ResolvedSettings,
+): string {
+  if (manager === "npm") return mergeNpmrc(raw, codes, settings);
+  if (manager === "pnpm") return mergePnpmYaml(raw, codes, settings);
+  if (manager === "yarn") return mergeYarnYaml(raw, codes);
+  if (manager === "bun") return mergeBunfig(raw, codes);
+  return mergeUv(raw, codes, settings);
+}
+
+function mergeNpmrc(raw: string, codes: Set<string>, settings: ResolvedSettings): string {
+  const updates: Record<string, string> = {};
+  if (codes.has("scripts.unrestricted")) updates["ignore-scripts"] = "true";
+  if (codes.has("audit.disabled")) {
+    updates.audit = "true";
+    updates["audit-level"] = settings.auditLevel;
+  }
+  if (codes.has("min-age.disabled")) updates["min-release-age"] = String(settings.minReleaseAgeDays);
+  if (codes.has("registry.unpinned")) updates.registry = DEFAULT_REGISTRY;
+
+  const seen = new Set<string>();
+  const lines = raw.split(/\r?\n/).map((line) => {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#") || trimmed.startsWith(";")) return line;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) return line;
+    const key = trimmed.slice(0, eq).trim();
+    if (key in updates) {
+      seen.add(key);
+      return `${key}=${updates[key]}`;
+    }
+    return line;
+  });
+  const out = [...lines];
+  while (out.length > 0 && out[out.length - 1] === "") out.pop();
+  for (const [key, value] of Object.entries(updates)) {
+    if (!seen.has(key)) out.push(`${key}=${value}`);
+  }
+  return `${out.join("\n")}\n`;
+}
+
+function mergePnpmYaml(raw: string, codes: Set<string>, settings: ResolvedSettings): string {
+  const yaml = parseYaml(raw);
+  if (codes.has("scripts.unrestricted")) {
+    yaml.dangerouslyAllowAllBuilds = false;
+    if (yaml.onlyBuiltDependencies === undefined && yaml.neverBuiltDependencies === undefined) {
+      yaml.onlyBuiltDependencies = [];
+    }
+  }
+  if (codes.has("audit.disabled")) {
+    yaml.audit = true;
+    yaml.auditLevel = settings.auditLevel;
+  }
+  if (codes.has("min-age.disabled")) yaml.minimumReleaseAge = settings.minReleaseAgeDays * 24;
+  if (codes.has("registry.unpinned") && !hasText(yaml.registry) && !hasDefaultRegistry(yaml)) {
+    yaml.registry = DEFAULT_REGISTRY;
+  }
+  return stringifyYaml(yaml);
+}
+
+function mergeYarnYaml(raw: string, codes: Set<string>): string {
+  const yaml = parseYaml(raw);
+  if (codes.has("scripts.unrestricted")) yaml.enableScripts = false;
+  if (codes.has("audit.disabled")) {
+    delete yaml.audit;
+    delete yaml.npmAudit;
+    yaml.enableNpmAudit = true;
+  }
+  if (codes.has("registry.unpinned") && !hasText(yaml.npmRegistryServer)) {
+    yaml.npmRegistryServer = DEFAULT_REGISTRY;
+  }
+  return stringifyYaml(yaml);
+}
+
+function mergeBunfig(raw: string, codes: Set<string>): string {
+  const table = parseTomlObject(raw);
+  const install = isPlainObject(table.install) ? table.install : {};
+  if (codes.has("scripts.unrestricted")) install.ignoreScripts = true;
+  if (codes.has("registry.unpinned") && !bunRegistryPinned(install)) {
+    install.registry = DEFAULT_REGISTRY;
+  }
+  table.install = install;
+  return `${stringifyToml(table).trimEnd()}\n`;
+}
+
+function mergeUv(raw: string, codes: Set<string>, settings: ResolvedSettings): string {
+  const table = parseTomlObject(raw);
+  const target = uvWriteTable(table);
+  if (codes.has("min-age.disabled")) {
+    target["exclude-newer"] = new Date(
+      Date.now() - settings.minReleaseAgeDays * 86_400_000,
+    ).toISOString();
+  }
+  if (codes.has("registry.unpinned")) target["index-strategy"] = "first-index";
+  return `${stringifyToml(table).trimEnd()}\n`;
+}
+
+function uvWriteTable(table: Record<string, unknown>): Record<string, unknown> {
+  if (table["exclude-newer"] !== undefined || table["index-strategy"] !== undefined) return table;
+  if (isPlainObject(table.tool) || table.project !== undefined) {
+    const tool = isPlainObject(table.tool) ? table.tool : {};
+    table.tool = tool;
+    const uv = isPlainObject(tool.uv) ? tool.uv : {};
+    tool.uv = uv;
+    return uv;
+  }
+  return table;
+}
+
+function resolveSettings(policy: Policy, name: PackageManager): ResolvedSettings {
+  const base = PRESET_DEFAULTS[policy.preset];
+  const extra = { ...policy.overrides, ...policy.perManager[name] };
+  return {
+    minReleaseAgeDays:
+      typeof extra.minReleaseAgeDays === "number" ? extra.minReleaseAgeDays : base.minReleaseAgeDays,
+    auditLevel: typeof extra.auditLevel === "string" ? extra.auditLevel : base.auditLevel,
+  };
+}
+
+function parseYaml(raw: string): Record<string, unknown> {
+  if (raw.trim() === "") return {};
+  try {
+    const parsed: unknown = Bun.YAML.parse(raw);
+    return isPlainObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function stringifyYaml(obj: Record<string, unknown>): string {
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(obj)) {
+    if (Array.isArray(value)) {
+      if (value.length === 0) {
+        lines.push(`${key}: []`);
+      } else {
+        lines.push(`${key}:`);
+        for (const item of value) lines.push(`  - ${yamlScalar(item)}`);
+      }
+    } else if (isPlainObject(value)) {
+      lines.push(`${key}:`);
+      for (const [childKey, child] of Object.entries(value)) {
+        lines.push(`  ${childKey}: ${yamlScalar(child)}`);
+      }
+    } else {
+      lines.push(`${key}: ${yamlScalar(value)}`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function yamlScalar(value: unknown): string {
+  if (typeof value === "string") {
+    if (value === "" || /[:#{}[\],&*?|<>=!%@`]/.test(value)) return JSON.stringify(value);
+    return value;
+  }
+  if (typeof value === "boolean" || typeof value === "number") return String(value);
+  if (value === null) return "null";
+  return JSON.stringify(value);
+}
+
+function parseTomlObject(raw: string): Record<string, unknown> {
+  if (raw.trim() === "") return {};
+  try {
+    const parsed: unknown = parseToml(raw);
+    return isPlainObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function hasToolUv(raw: string): boolean {
+  const table = parseTomlObject(raw);
+  const tool = isPlainObject(table.tool) ? table.tool : {};
+  return isPlainObject(tool.uv);
+}
+
+function hasDefaultRegistry(yaml: Record<string, unknown>): boolean {
+  const registries = yaml.registries;
+  return isPlainObject(registries) && hasText(registries.default);
+}
+
+function bunRegistryPinned(install: Record<string, unknown>): boolean {
+  const registry = install.registry;
+  if (hasText(registry)) return true;
+  return isPlainObject(registry) && hasText(registry.url);
+}
+
+function localPath(root: string, name: string): string {
+  return root.endsWith("/") ? `${root}${name}` : `${root}/${name}`;
+}
+
+function isForbiddenWrite(path: string, root: string): boolean {
+  if (path === "~/.npmrc") return true;
+  return !isInside(path, root);
+}
+
+function isInside(path: string, root: string): boolean {
+  const prefix = root.endsWith("/") ? root : `${root}/`;
+  return path === root || path.startsWith(prefix);
+}
+
+function hasText(value: unknown): boolean {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
