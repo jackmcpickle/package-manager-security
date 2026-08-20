@@ -198,6 +198,127 @@ test("poetry primary emits python.not-uv and is not fixable", () => {
   ]);
 });
 
+function bunProject(root: string): Project {
+  return {
+    root,
+    gitRoot: root,
+    managers: [
+      {
+        name: "bun",
+        role: "primary",
+        manifestPath: `${root}/package.json`,
+        lockfilePath: `${root}/bun.lock`,
+        configPath: `${root}/bunfig.toml`,
+      },
+    ],
+  };
+}
+
+function uvProject(root: string): Project {
+  return {
+    root,
+    gitRoot: root,
+    managers: [
+      {
+        name: "uv",
+        role: "primary",
+        manifestPath: `${root}/pyproject.toml`,
+        lockfilePath: `${root}/uv.lock`,
+        configPath: `${root}/pyproject.toml`,
+      },
+    ],
+  };
+}
+
+test("bun primary with bare bunfig.toml has no trustedDependencies so scripts are unrestricted", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/bun.lock": `{"lockfileVersion":1}`,
+    "/p/bunfig.toml": `[install]\nregistry = "https://registry.npmjs.org/"\n`,
+  };
+  const findings = auditSettings(bunProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "scripts.unrestricted")).toBe(true);
+});
+
+test("bun primary fully configured is quiet under standard", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/bun.lock": `{"lockfileVersion":1}`,
+    "/p/bunfig.toml":
+      `trustedDependencies = ["foo"]\n\n[install]\nregistry = "https://registry.npmjs.org/"\n`,
+  };
+  const findings = auditSettings(bunProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.filter((f) => f.kind === "settings")).toEqual([]);
+});
+
+test("bun primary with no lockfile emits lockfile.missing", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/bunfig.toml":
+      `trustedDependencies = ["foo"]\n\n[install]\nregistry = "https://registry.npmjs.org/"\n`,
+  };
+  const findings = auditSettings(bunProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "lockfile.missing")).toBe(true);
+});
+
+test("uv primary with uv.lock absent emits lockfile.missing", () => {
+  const files: Record<string, string> = {
+    "/p/pyproject.toml": `[tool.uv]\nexclude-newer = 30\n`,
+  };
+  const findings = auditSettings(uvProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "lockfile.missing")).toBe(true);
+});
+
+test("uv primary with compliant exclude-newer and lock present is quiet, and uv never emits pm.unpinned", () => {
+  const files: Record<string, string> = {
+    "/p/pyproject.toml": `[tool.uv]\nexclude-newer = 30\n`,
+    "/p/uv.lock": `version = 1\n`,
+  };
+  const findings = auditSettings(uvProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.filter((f) => f.kind === "settings")).toEqual([]);
+  expect(findings.some((f) => f.code === "pm.unpinned")).toBe(false);
+});
+
+test("uv primary missing exclude-newer emits min-age.disabled under standard", () => {
+  const files: Record<string, string> = {
+    "/p/pyproject.toml": `[tool.uv]\n`,
+    "/p/uv.lock": `version = 1\n`,
+  };
+  const findings = auditSettings(uvProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "min-age.disabled")).toBe(true);
+});
+
+test("uv strict flags an extra index without index-strategy first-index, standard does not", () => {
+  const files: Record<string, string> = {
+    "/p/pyproject.toml":
+      `[tool.uv]\nexclude-newer = 30\nextra-index-url = "https://extra.example/simple"\n`,
+    "/p/uv.lock": `version = 1\n`,
+  };
+  const strictFindings = auditSettings(
+    uvProject("/p"),
+    loadPolicy({ flags: { preset: "strict" } }),
+    { readFile: (p) => files[p] ?? null },
+  );
+  expect(strictFindings.some((f) => f.code === "registry.unpinned")).toBe(true);
+
+  const standardFindings = auditSettings(uvProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(standardFindings.some((f) => f.code === "registry.unpinned")).toBe(false);
+});
+
 test("malformed yarn packageManager pin is unpinned", () => {
   const project: Project = {
     root: "/y",
