@@ -1,10 +1,11 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import type { ApplyPrompt } from "./apply-advisories";
 import { auditPath, defaultDigest, type AuditRun } from "./audit";
 import { CACHE_TTL_MS, createFsCache, type Cache } from "./cache";
 import type { ExitCode, Finding, PresetName } from "./domain";
 import { loadPolicy } from "./policy";
-import { formatHuman } from "./report";
+import { formatHuman, formatJson, formatMarkdown, formatSarif } from "./report";
 
 export async function run(
   argv: string[],
@@ -22,6 +23,9 @@ export async function run(
     writeFile?: (path: string, body: string) => void;
     gitStatus?: (root: string) => "clean" | "dirty" | "not-git";
     gitCommit?: (root: string, message: string, files: string[]) => boolean;
+    prompt?: ApplyPrompt;
+    currentVersions?: Record<string, string>;
+    fixVersions?: Record<string, string>;
   },
 ): Promise<{ exitCode: ExitCode }> {
   const stdout = deps?.stdout ?? process.stdout;
@@ -58,6 +62,7 @@ export async function run(
     flags: flags.preset === undefined ? undefined : { preset: flags.preset },
     force: flags.force,
     commit: flags.commit,
+    allowMajors: flags.allowMajors,
     deps: {
       readFile,
       readDir,
@@ -71,10 +76,20 @@ export async function run(
       writeFile: deps?.writeFile ?? writeFile,
       gitStatus: deps?.gitStatus ?? defaultGitStatus,
       gitCommit: deps?.gitCommit ?? defaultGitCommit,
+      prompt: deps?.prompt,
+      currentVersions: deps?.currentVersions,
+      fixVersions: deps?.fixVersions,
     },
   });
 
-  stdout.write(flags.json ? `${JSON.stringify(result)}\n` : formatHuman(result));
+  const write = deps?.writeFile ?? writeFile;
+  if (flags.report !== undefined) {
+    const reportPath = isAbsolute(flags.report) ? flags.report : join(cwd, flags.report);
+    write(reportPath, formatMarkdown(result));
+  }
+  if (flags.json) stdout.write(formatJson(result));
+  else if (flags.sarif) stdout.write(formatSarif(result));
+  else stdout.write(formatHuman(result));
   return { exitCode: result.exitCode };
 }
 
@@ -86,8 +101,11 @@ function parseAuditArgs(args: string[]): {
   interactive: boolean;
   concurrency: number;
   json: boolean;
+  sarif: boolean;
+  report?: string;
   force: boolean;
   commit: boolean;
+  allowMajors: boolean;
 } {
   let path: string | undefined;
   let preset: PresetName | undefined;
@@ -96,8 +114,11 @@ function parseAuditArgs(args: string[]): {
   let interactive = false;
   let concurrency = 4;
   let json = false;
+  let sarif = false;
+  let report: string | undefined;
   let force = false;
   let commit = false;
+  let allowMajors = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
@@ -145,16 +166,23 @@ function parseAuditArgs(args: string[]): {
       json = true;
       continue;
     }
-    if (
-      arg === "--sarif" ||
-      arg === "--refresh" ||
-      arg === "--no-cache" ||
-      arg === "--allow-majors"
-    ) {
+    if (arg === "--sarif") {
+      sarif = true;
+      continue;
+    }
+    if (arg === "--allow-majors") {
+      allowMajors = true;
+      continue;
+    }
+    if (arg === "--refresh" || arg === "--no-cache") {
       continue;
     }
     if (arg === "--report") {
-      i += 1;
+      report = args[++i];
+      continue;
+    }
+    if (arg.startsWith("--report=")) {
+      report = arg.slice("--report=".length);
       continue;
     }
     if (!arg.startsWith("-")) {
@@ -162,7 +190,20 @@ function parseAuditArgs(args: string[]): {
     }
   }
 
-  return { path, preset, apply, applyAdvisories, interactive, concurrency, json, force, commit };
+  return {
+    path,
+    preset,
+    apply,
+    applyAdvisories,
+    interactive,
+    concurrency,
+    json,
+    sarif,
+    report,
+    force,
+    commit,
+    allowMajors,
+  };
 }
 
 function writeFile(path: string, body: string): void {

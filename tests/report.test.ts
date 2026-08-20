@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { formatHuman } from "../src/report";
+import { formatHuman, formatJson, formatMarkdown, formatSarif } from "../src/report";
 import type { Project } from "../src/domain";
+import type { AuditResult } from "../src/audit";
 
 test("formatHuman includes repos scanned, settings findings count, and warnings count", () => {
   const project: Project = {
@@ -100,4 +101,38 @@ test("formatHuman counts advisories by severity separately from settings", () =>
   expect(text).toContain("settings findings: 1");
   expect(text).toMatch(/advisories:.*critical 1/);
   expect(text).toMatch(/high 1/);
+});
+
+const sampleResult: AuditResult = {
+  exitCode: 1,
+  projects: [
+    {
+      project: { root: "/p", gitRoot: "/p", managers: [] },
+      findings: [
+        {
+          kind: "settings",
+          code: "scripts.unrestricted",
+          message: "npm ignore-scripts must be true",
+          severity: "high",
+          path: "/p/.npmrc",
+          fixable: true,
+          manager: "npm",
+        },
+      ],
+    },
+  ],
+};
+
+test("format json and markdown include finding codes", () => {
+  const json = formatJson(sampleResult);
+  const md = formatMarkdown(sampleResult);
+  expect(json).toContain("scripts.unrestricted");
+  expect(md).toContain("scripts.unrestricted");
+});
+
+test("format sarif includes finding codes from the same result", () => {
+  const sarif = formatSarif(sampleResult);
+  expect(sarif).toContain("scripts.unrestricted");
+  const parsed = JSON.parse(sarif) as { version: string };
+  expect(parsed.version).toBe("2.1.0");
 });

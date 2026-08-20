@@ -236,3 +236,92 @@ test("--json prints the full result object with advisory findings", async () => 
     true,
   );
 });
+
+test("--json --sarif --report emit the same finalized finding codes", async () => {
+  mkdirSync(join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"), { recursive: true });
+  const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
+  const home = { HOME: join(import.meta.dir, "fixtures/empty-home") };
+  const cache = createFsCache(join(cacheDir, "reports"), () => 1_000, 86_400_000);
+  const written: Record<string, string> = {};
+  const jsonOut: string[] = [];
+  const sarifOut: string[] = [];
+  const mdOut: string[] = [];
+
+  await run(["audit", root, "--json"], {
+    stdout: { write: (s: string) => jsonOut.push(s) },
+    stderr: { write: () => undefined },
+    cwd: import.meta.dir,
+    env: home,
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache,
+    writeFile: (path, body) => {
+      written[path] = body;
+    },
+  });
+  await run(["audit", root, "--sarif"], {
+    stdout: { write: (s: string) => sarifOut.push(s) },
+    stderr: { write: () => undefined },
+    cwd: import.meta.dir,
+    env: home,
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache,
+    writeFile: (path, body) => {
+      written[path] = body;
+    },
+  });
+  await run(["audit", root, "--report", "/out/report.md"], {
+    stdout: { write: (s: string) => mdOut.push(s) },
+    stderr: { write: () => undefined },
+    cwd: import.meta.dir,
+    env: home,
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache,
+    writeFile: (path, body) => {
+      written[path] = body;
+    },
+  });
+
+  expect(jsonOut.join("")).toContain("scripts.unrestricted");
+  expect(sarifOut.join("")).toContain("scripts.unrestricted");
+  expect(written["/out/report.md"]).toContain("scripts.unrestricted");
+  expect(Object.keys(written).filter((path) => path.endsWith(".md"))).toEqual(["/out/report.md"]);
+  expect(mdOut.join("")).not.toMatch(/^# /);
+});
+
+test("interactive fake prompt can choose settings only", async () => {
+  mkdirSync(join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"), { recursive: true });
+  const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
+  const written: Record<string, string> = {};
+  const prompts: Array<{ settingsCount: number; advisoryCount: number }> = [];
+  const installCalls: string[][] = [];
+  const result = await run(["audit", root, "-i"], {
+    stdout: { write: () => undefined },
+    stderr: { write: () => undefined },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: async (argv) => {
+      if (!argv.includes("audit")) installCalls.push(argv);
+      return { code: 0, stdout: `{"advisories":{}}`, stderr: "" };
+    },
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "interactive"), () => 1_000, 86_400_000),
+    writeFile: (path, body) => {
+      written[path] = body;
+    },
+    gitStatus: () => "clean",
+    prompt: async ({ project, settingsCount, advisoryCount }) => {
+      expect(project.root).toContain("alpha");
+      prompts.push({ settingsCount, advisoryCount });
+      return "settings";
+    },
+  });
+  expect(prompts).toHaveLength(1);
+  expect(prompts[0]!.settingsCount).toBeGreaterThan(0);
+  expect(Object.values(written).some((body) => body.includes("ignore-scripts=true"))).toBe(true);
+  expect(installCalls).toEqual([]);
+  expect(result.exitCode).not.toBe(2);
+});
+
