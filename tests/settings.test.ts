@@ -319,6 +319,214 @@ test("uv strict flags an extra index without index-strategy first-index, standar
   expect(standardFindings.some((f) => f.code === "registry.unpinned")).toBe(false);
 });
 
+test("relaxed preset does not require ignore-scripts, min-release-age, or pm pin", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/.npmrc": `registry=https://registry.npmjs.org/\n`,
+  };
+  const findings = auditSettings(
+    npmProject("/p"),
+    loadPolicy({ flags: { preset: "relaxed" } }),
+    { readFile: (p) => files[p] ?? null },
+  );
+  expect(findings.some((f) => f.code === "scripts.unrestricted")).toBe(false);
+  expect(findings.some((f) => f.code === "min-age.disabled")).toBe(false);
+  expect(findings.some((f) => f.code === "pm.unpinned")).toBe(false);
+});
+
+test("strict preset flags unpinned registry and pm as high, standard flags the same as info", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/.npmrc": `ignore-scripts=true\naudit=true\nmin-release-age=14\n`,
+  };
+  const strictFindings = auditSettings(
+    npmProject("/p"),
+    loadPolicy({ flags: { preset: "strict" } }),
+    { readFile: (p) => files[p] ?? null },
+  );
+  expect(
+    strictFindings.find((f) => f.code === "registry.unpinned")?.severity,
+  ).toBe("high");
+  expect(strictFindings.find((f) => f.code === "pm.unpinned")?.severity).toBe(
+    "high",
+  );
+
+  const standardFindings = auditSettings(npmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(
+    standardFindings.find((f) => f.code === "registry.unpinned")?.severity,
+  ).toBe("info");
+  expect(
+    standardFindings.find((f) => f.code === "pm.unpinned")?.severity,
+  ).toBe("info");
+});
+
+const validNpmrc =
+  "ignore-scripts=true\naudit=true\naudit-level=high\nmin-release-age=7\nregistry=https://registry.npmjs.org/\n";
+
+test("npm missing package-lock.json emits lockfile.missing under standard", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+    "/p/.npmrc": validNpmrc,
+  };
+  const findings = auditSettings(npmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "lockfile.missing")).toBe(true);
+});
+
+test("npm .npmrc with no audit config emits audit.disabled under standard", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/.npmrc": `ignore-scripts=true\nmin-release-age=7\nregistry=https://registry.npmjs.org/\n`,
+  };
+  const findings = auditSettings(npmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "audit.disabled")).toBe(true);
+});
+
+test("npm with no min-release-age emits min-age.disabled under standard", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/.npmrc": `ignore-scripts=true\naudit=true\naudit-level=high\nregistry=https://registry.npmjs.org/\n`,
+  };
+  const findings = auditSettings(npmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "min-age.disabled")).toBe(true);
+});
+
+test("npm with no registry= emits registry.unpinned under standard", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/.npmrc": `ignore-scripts=true\naudit=true\naudit-level=high\nmin-release-age=7\n`,
+  };
+  const findings = auditSettings(npmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "registry.unpinned")).toBe(true);
+});
+
+test("npm with no packageManager field emits pm.unpinned under standard", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/.npmrc": validNpmrc,
+  };
+  const findings = auditSettings(npmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "pm.unpinned")).toBe(true);
+});
+
+const validPnpmWorkspace =
+  "packages:\n  - '.'\nminimumReleaseAge: 10080\nonlyBuiltDependencies: []\naudit: true\naudit-level: high\nregistry: https://registry.npmjs.org/\n";
+
+test("pnpm dangerouslyAllowAllBuilds true emits scripts.unrestricted under standard", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
+    "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "/p/pnpm-workspace.yaml":
+      "packages:\n  - '.'\nminimumReleaseAge: 10080\naudit: true\naudit-level: high\nregistry: https://registry.npmjs.org/\ndangerouslyAllowAllBuilds: true\n",
+  };
+  const findings = auditSettings(pnpmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "scripts.unrestricted")).toBe(true);
+});
+
+test("pnpm missing pnpm-lock.yaml emits lockfile.missing under standard", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
+    "/p/pnpm-workspace.yaml": validPnpmWorkspace,
+  };
+  const findings = auditSettings(pnpmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "lockfile.missing")).toBe(true);
+});
+
+test("pnpm with audit disabled emits audit.disabled under standard", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
+    "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "/p/pnpm-workspace.yaml":
+      "packages:\n  - '.'\nminimumReleaseAge: 10080\nonlyBuiltDependencies: []\nregistry: https://registry.npmjs.org/\n",
+  };
+  const findings = auditSettings(pnpmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "audit.disabled")).toBe(true);
+});
+
+test("pnpm with no registry emits registry.unpinned under standard", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
+    "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "/p/pnpm-workspace.yaml":
+      "packages:\n  - '.'\nminimumReleaseAge: 10080\nonlyBuiltDependencies: []\naudit: true\naudit-level: high\n",
+  };
+  const findings = auditSettings(pnpmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "registry.unpinned")).toBe(true);
+});
+
+test("pnpm with no pnpm@ pin emits pm.unpinned under standard", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "/p/pnpm-workspace.yaml": validPnpmWorkspace,
+  };
+  const findings = auditSettings(pnpmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "pm.unpinned")).toBe(true);
+});
+
+test("enabledManagers omitting pnpm skips pnpm settings findings but still reports leftover lockfile", () => {
+  const project: Project = {
+    root: "/p",
+    gitRoot: "/p",
+    managers: [
+      {
+        name: "pnpm",
+        role: "primary",
+        manifestPath: "/p/package.json",
+        lockfilePath: "/p/pnpm-lock.yaml",
+        configPath: "/p/pnpm-workspace.yaml",
+      },
+      {
+        name: "npm",
+        role: "leftover",
+        manifestPath: "/p/package.json",
+        lockfilePath: "/p/package-lock.json",
+        configPath: null,
+      },
+    ],
+  };
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "/p/pnpm-workspace.yaml": "packages:\n  - '.'\n",
+  };
+  const policy = loadPolicy({
+    scanToml: 'enabledManagers = ["npm", "yarn", "bun", "uv"]\n',
+  });
+  const findings = auditSettings(project, policy, {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "lockfile.leftover")).toBe(true);
+  expect(findings.some((f) => f.manager === "pnpm")).toBe(false);
+});
+
 test("malformed yarn packageManager pin is unpinned", () => {
   const project: Project = {
     root: "/y",
