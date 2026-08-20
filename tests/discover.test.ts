@@ -226,6 +226,89 @@ test("TOML date scalar tool.poetry is not poetry", () => {
   expect(projects.some((p) => p.managers.some((m) => m.name === "poetry"))).toBe(false);
 });
 
+test("a lone un-git’d tree with package.json and lockfile is one project", () => {
+  const projects = discoverProjects(
+    "/app",
+    memoryFs({
+      "/app/package.json": `{"name":"app"}`,
+      "/app/package-lock.json": `{"lockfileVersion":3}`,
+    }),
+  );
+  expect(projects).toHaveLength(1);
+  expect(projects[0]?.root).toBe("/app");
+  expect(projects[0]?.gitRoot).toBeNull();
+  expect(projects[0]?.managers.some((m) => m.name === "npm" && m.role === "primary")).toBe(true);
+});
+
+test("requirements.txt without uv is a pip primary", () => {
+  const projects = discoverProjects(
+    "/reqs",
+    memoryFs({
+      "/reqs/requirements.txt": "requests==2.0.0\n",
+    }),
+  );
+  expect(projects[0]?.managers).toEqual([
+    expect.objectContaining({ name: "pip", role: "primary", manifestPath: "/reqs/requirements.txt" }),
+  ]);
+});
+
+test("requirements-dev.txt without uv is a pip primary", () => {
+  const projects = discoverProjects(
+    "/reqs",
+    memoryFs({
+      "/reqs/requirements-dev.txt": "pytest==8.0.0\n",
+    }),
+  );
+  expect(projects[0]?.managers).toEqual([
+    expect.objectContaining({
+      name: "pip",
+      role: "primary",
+      manifestPath: "/reqs/requirements-dev.txt",
+    }),
+  ]);
+});
+
+test("nested git repos: parent without a PM is not a project and the child repo is", () => {
+  const projects = discoverProjects(
+    "/workspace",
+    memoryFs(
+      {
+        "/workspace/parent/README.md": "meta\n",
+        "/workspace/parent/child/package.json": `{"name":"child"}`,
+        "/workspace/parent/child/package-lock.json": `{"lockfileVersion":3}`,
+      },
+      ["/workspace/parent/.git", "/workspace/parent/child/.git"],
+    ),
+  );
+  expect(projects).toHaveLength(1);
+  expect(projects[0]?.root).toBe("/workspace/parent/child");
+  expect(projects[0]?.gitRoot).toBe("/workspace/parent/child");
+});
+
+test("pyproject [project] table without uv or poetry is pip", () => {
+  const projects = discoverProjects(
+    "/proj",
+    memoryFs({
+      "/proj/pyproject.toml": `[project]\nname = "lib"\nversion = "0.1.0"\n`,
+    }),
+  );
+  expect(projects[0]?.managers.some((m) => m.name === "pip" && m.role === "primary")).toBe(true);
+  expect(projects[0]?.managers.some((m) => m.name === "uv" || m.name === "poetry")).toBe(false);
+});
+
+test("uv plus poetry makes poetry leftover and uv primary", () => {
+  const projects = discoverProjects(
+    "/both",
+    memoryFs({
+      "/both/pyproject.toml": `[project]\nname = "x"\n[tool.uv]\n[tool.poetry]\nname = "x"\n`,
+      "/both/uv.lock": "x\n",
+      "/both/poetry.lock": "# poetry\n",
+    }),
+  );
+  expect(projects[0]?.managers.some((m) => m.name === "uv" && m.role === "primary")).toBe(true);
+  expect(projects[0]?.managers.some((m) => m.name === "poetry" && m.role === "leftover")).toBe(true);
+});
+
 test("skip directories are not walked for repos or PM roots", () => {
   const projects = discoverProjects(
     "/root",

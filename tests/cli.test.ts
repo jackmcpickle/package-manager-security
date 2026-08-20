@@ -530,6 +530,195 @@ test("--apply on a dirty tree warns on stderr and exits 2", async () => {
   expect(err).toContain(root);
 });
 
+const INFO_ONLY_NPM: Record<string, string> = {
+  "/p/package.json": `{"name":"x"}`,
+  "/p/package-lock.json": `{"lockfileVersion":3}`,
+  "/p/.npmrc":
+    "ignore-scripts=true\naudit=true\naudit-level=high\nmin-release-age=7\n",
+};
+
+const CLEAN_UV_FILES: Record<string, string> = {
+  "/uv/pyproject.toml": `[tool.uv]\nexclude-newer = 30\n`,
+  "/uv/uv.lock": `version = 1\n`,
+};
+
+function advisoryJson(severity: string): string {
+  return JSON.stringify({
+    advisories: {
+      "1": {
+        module_name: "left-pad",
+        severity,
+        github_advisory_id: `GHSA-${severity}`,
+        title: `${severity} left-pad advisory`,
+        findings: [{ version: "1.0.0" }],
+      },
+    },
+  });
+}
+
+test("info-only settings findings do not fail the standard gate", async () => {
+  const fs = memoryFs(INFO_ONLY_NPM, ["/p/.git"]);
+  const result = await auditPath("/p", {
+    policy: loadPolicy({}),
+    apply: false,
+    applyAdvisories: false,
+    interactive: false,
+    concurrency: 4,
+    deps: {
+      ...fs,
+      which: () => "/usr/bin/npm",
+      run: emptyAuditRun(),
+      cache: createFsCache(join(cacheDir, "info-only"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+      digest: () => "npm-info-only",
+    },
+  });
+  const findings = result.projects.flatMap((row) => row.findings);
+  expect(findings.some((f) => f.code === "registry.unpinned" && f.severity === "info")).toBe(true);
+  expect(findings.some((f) => f.code === "pm.unpinned" && f.severity === "info")).toBe(true);
+  expect(result.exitCode).toBe(0);
+});
+
+test("standard lists a moderate advisory but does not fail; strict does", async () => {
+  const fs = memoryFs(CLEAN_NPM_FILES, ["/p/.git"]);
+  const moderate = advisoryJson("moderate");
+  const standard = await auditPath("/p", {
+    policy: loadPolicy({}),
+    apply: false,
+    applyAdvisories: false,
+    interactive: false,
+    concurrency: 4,
+    deps: {
+      ...fs,
+      which: () => "/usr/bin/npm",
+      run: async () => ({ code: 1, stdout: moderate, stderr: "" }),
+      cache: createFsCache(join(cacheDir, "mod-std"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+      digest: () => "npm-moderate-std",
+    },
+  });
+  expect(
+    standard.projects
+      .flatMap((row) => row.findings)
+      .some((f) => f.kind === "advisory" && f.severity === "moderate"),
+  ).toBe(true);
+  expect(standard.exitCode).toBe(0);
+
+  const strict = await auditPath("/p", {
+    policy: loadPolicy({ flags: { preset: "strict" } }),
+    apply: false,
+    applyAdvisories: false,
+    interactive: false,
+    concurrency: 4,
+    deps: {
+      ...fs,
+      which: () => "/usr/bin/npm",
+      run: async () => ({ code: 1, stdout: moderate, stderr: "" }),
+      cache: createFsCache(join(cacheDir, "mod-strict"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+      digest: () => "npm-moderate-strict",
+    },
+  });
+  expect(strict.exitCode).toBe(1);
+});
+
+test("relaxed fails only critical advisories; a high advisory is listed and exits 0", async () => {
+  const fs = memoryFs(CLEAN_NPM_FILES, ["/p/.git"]);
+  const result = await auditPath("/p", {
+    policy: loadPolicy({ flags: { preset: "relaxed" } }),
+    apply: false,
+    applyAdvisories: false,
+    interactive: false,
+    concurrency: 4,
+    deps: {
+      ...fs,
+      which: () => "/usr/bin/npm",
+      run: async () => ({ code: 1, stdout: advisoryJson("high"), stderr: "" }),
+      cache: createFsCache(join(cacheDir, "relaxed-high"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+      digest: () => "npm-relaxed-high",
+    },
+  });
+  expect(
+    result.projects
+      .flatMap((row) => row.findings)
+      .some((f) => f.kind === "advisory" && f.severity === "high"),
+  ).toBe(true);
+  expect(result.exitCode).toBe(0);
+});
+
+test("uv deprecation fails even under the relaxed preset", async () => {
+  const fs = memoryFs(CLEAN_UV_FILES, ["/uv/.git"]);
+  const result = await auditPath("/uv", {
+    policy: loadPolicy({ flags: { preset: "relaxed" } }),
+    apply: false,
+    applyAdvisories: false,
+    interactive: false,
+    concurrency: 4,
+    deps: {
+      ...fs,
+      which: (binary) => (binary === "uv" ? "/usr/bin/uv" : null),
+      run: async () => ({
+        code: 0,
+        stdout: JSON.stringify([{ name: "oldpkg", version: "1.0.0", status: "deprecated" }]),
+        stderr: "",
+      }),
+      cache: createFsCache(join(cacheDir, "uv-depr"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+      digest: () => "uv-deprecated",
+    },
+  });
+  expect(result.projects.flatMap((row) => row.findings).some((f) => f.kind === "deprecated")).toBe(
+    true,
+  );
+  expect(result.exitCode).toBe(1);
+});
+
+test("interactive skip writes nothing", async () => {
+  mkdirSync(join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"), { recursive: true });
+  const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
+  const result = await run(["audit", root, "-i"], {
+    stdout: { write: () => undefined },
+    stderr: { write: () => undefined },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "interactive-skip"), () => 1_000, 86_400_000),
+    writeFile: () => {
+      throw new Error("skip must not write");
+    },
+    gitStatus: () => "clean",
+    prompt: async () => "skip" as const,
+  });
+  expect(result.exitCode).toBe(1);
+});
+
+test("--apply on a poetry project never runs uv migrate commands", async () => {
+  mkdirSync(join(import.meta.dir, "fixtures/discover/poetry-app/.git"), { recursive: true });
+  const root = join(import.meta.dir, "fixtures/discover/poetry-app");
+  const calls: string[][] = [];
+  const written: string[] = [];
+  await run(["audit", root, "--apply"], {
+    stdout: { write: () => undefined },
+    stderr: { write: () => undefined },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: async (argv) => {
+      calls.push(argv);
+      return { code: 0, stdout: "{}", stderr: "" };
+    },
+    which: () => "/usr/bin/uv",
+    cache: createFsCache(join(cacheDir, "no-migrate"), () => 1_000, 86_400_000),
+    writeFile: (path) => {
+      written.push(path);
+    },
+    gitStatus: () => "clean",
+  });
+  expect(calls.every((argv) => argv[0] !== "uv")).toBe(true);
+  expect(written.some((path) => path.endsWith("uv.toml") || path.endsWith("uv.lock"))).toBe(false);
+});
+
 test("stdout uses ANSI colors when color is enabled and none by default", async () => {
   const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
   const colored: string[] = [];

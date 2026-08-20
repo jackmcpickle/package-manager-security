@@ -101,10 +101,7 @@ function findNestedGitRepos(dir: string, fs: Fs): string[] {
     if (SKIP_DIRS.has(name)) continue;
     const child = join(dir, name);
     if (!fs.isDir(child)) continue;
-    if (hasGit(child, fs)) {
-      found.push(child);
-      continue;
-    }
+    if (hasGit(child, fs)) found.push(child);
     found.push(...findNestedGitRepos(child, fs));
   }
   return found;

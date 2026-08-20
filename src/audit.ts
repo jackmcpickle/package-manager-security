@@ -317,6 +317,7 @@ function overlayRepoPolicy(
 
 function failsGate(finding: Finding, gate: number): boolean {
   if (finding.kind === "missing-binary") return false;
+  if (finding.kind === "deprecated" || finding.kind === "quarantine") return true;
   return SEVERITY_RANK[finding.severity] >= gate;
 }
 

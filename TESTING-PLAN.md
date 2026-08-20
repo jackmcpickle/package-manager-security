@@ -1,6 +1,6 @@
 # pmsec Testing Plan
 
-> Audit of the current suite (2026-08-20, `feat/pmsec`, 94 tests / 10 files) plus the scenario catalog still needed. Tests stay at the eight seams in `PLAN.md`. Do not mock our own modules. Inject filesystem, PATH, runners, time, and cache dir.
+> Audit of the current suite (2026-08-20, `feat/pmsec`, 161 tests / 10 files). Wave 1 is done. Tests stay at the eight seams in `PLAN.md`. Do not mock our own modules. Inject filesystem, PATH, runners, time, and cache dir.
 
 **Goal:** Every product scenario from the grilling / `PLAN.md` has a named test at exactly one layer. No duplicate coverage across layers.
 
@@ -20,7 +20,7 @@
 
 **Critical path that is already tested:** audit never writes by default; `--apply` writes npm/pnpm correctly; leftover is not fixable; yarn v1 is unsupported; Python not-uv; missing binary does not fail the run; cache TTL + refresh; no major bump; settings+advisories after self-dirty; unique git-root counts; flags beat repo TOML.
 
-**Critical path that is not tested:** bun/uv settings and apply; create-if-missing config files; `--commit` one-commit-per-repo with real `git add` of written paths only; zero-project / subprocess-death exit 2; migrate-to-uv interactive; `enabledManagers` disable; advisory gate per preset (moderate ignored under standard).
+**Critical path that is not tested (Wave 2+):** leftover yarn/bun/uv lockfiles; XDG config; malformed TOML policy; cache path isolation; `--concurrency` parse; `--report` no-file / bad dir; preflight yarn/bun missing; interactive migrate-to-uv (feature stub).
 
 ## 2. Recommended pyramid
 
@@ -61,11 +61,11 @@ Status: **done** = existing test name. **add** = write in the wave listed. **out
 | D12 | Pipenv stays primary when uv present | business | done |
 | D13 | Commented / scalar / date TOML is not poetry/pip | business | done |
 | D14 | Skip `node_modules`, `.git`, `dist`, `build`, `.venv`, `vendor`, `__pycache__`, `.pnpm-store` | business | done |
-| D15 | Lone un-git’d tree with one `package.json` + lock is one project | business | **add W1** |
-| D16 | `requirements.txt` / `requirements-dev.txt` without uv → pip primary | business | **add W1** |
-| D17 | `pyproject.toml` `[project]` table, no uv/poetry → pip | business | **add W1** |
-| D18 | uv + poetry → poetry leftover, uv primary | business | **add W1** |
-| D19 | Nested git repos: parent without PM is not a project | business | **add W1** |
+| D15 | Lone un-git’d tree with one `package.json` + lock is one project | business | done |
+| D16 | `requirements.txt` / `requirements-dev.txt` without uv → pip primary | business | done |
+| D17 | `pyproject.toml` `[project]` table, no uv/poetry → pip | business | done |
+| D18 | uv + poetry → poetry leftover, uv primary | business | done |
+| D19 | Nested git repos: parent without PM is not a project | business | done |
 | D20 | `packageManager: yarn@4` without `.yarnrc.yml` still Berry if lock exists | business | **add W2** |
 
 ### 3.2 Policy
@@ -78,7 +78,7 @@ Status: **done** = existing test name. **add** = write in the wave listed. **out
 | P4 | Flags beat per-PM tables | business | done |
 | P5 | Reject `[poetry]`/`[pip]`/`[pipenv]` policy tables | business | done |
 | P6 | CLI `--preset` beats repo `.pmsec.toml` | integration | done |
-| P7 | `enabledManagers` omitting pnpm skips pnpm settings (leftover still reported) | business | **add W1** |
+| P7 | `enabledManagers` omitting pnpm skips pnpm settings (leftover still reported) | business | done |
 | P8 | Invalid TOML in a layer is skipped or fails closed (pick one, test it) | business | **add W2** |
 | P9 | `XDG_CONFIG_HOME` wins over `~/.config/pmsec` when CLI loads files | integration | **add W2** |
 
@@ -90,20 +90,20 @@ For each **primary** manager, one **clean** fixture (no settings findings under 
 
 | Manager | scripts | lockfile | audit | min-age | registry | pm pin | leftover | notes |
 |---------|---------|----------|-------|---------|----------|--------|----------|-------|
-| npm | done (dirty+clean scripts) | **add W1** | **add W1** | **add W1** (relaxed: no emit) | **add W1** (info vs high) | **add W1** | done | file `.npmrc` |
-| pnpm | **add W1** | **add W1** | **add W1** | done (1440 / 10080) | **add W1** | **add W1** | done | file `pnpm-workspace.yaml` only |
-| yarn Berry | done (scripts) | **add W1** | **add W1** | n/a | **add W1** | done (malformed) | **add W2** leftover yarn.lock | `.yarnrc.yml` |
+| npm | done (dirty+clean scripts) | done | done | done (relaxed: no emit) | done (info vs high) | done | done | file `.npmrc` |
+| pnpm | done | done | done | done (1440 / 10080) | done | done | done | file `pnpm-workspace.yaml` only |
+| yarn Berry | done (scripts) | done | done | n/a | done | done (malformed) | **add W2** leftover yarn.lock | `.yarnrc.yml` |
 | yarn v1 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | done `pm.unsupported` only |
-| bun | **add W1** dirty+clean | **add W1** | n/a in impl | n/a | **add W1** | n/a | **add W2** | `bunfig.toml` |
-| uv | n/a scripts | **add W1** | n/a | **add W1** | **add W1** (strict extra index) | never emit | **add W2** | no `pm.unpinned` |
-| poetry/pip/pipenv | n/a | n/a | n/a | n/a | n/a | n/a | n/a | poetry done; **pip+pipenv add W1** |
+| bun | done dirty+clean | done | n/a in impl | n/a | done | n/a | **add W2** | `bunfig.toml` |
+| uv | n/a scripts | done | n/a | done | done (strict extra index) | never emit | **add W2** | no `pm.unpinned` |
+| poetry/pip/pipenv | n/a | n/a | n/a | n/a | n/a | n/a | n/a | done |
 
 Preset severity:
 
 | ID | Scenario | Status |
 |----|----------|--------|
-| S1 | `relaxed` does not emit `min-age.disabled` or require scripts deny | **add W1** |
-| S2 | `strict` raises `registry.unpinned` / `pm.unpinned` to high | **add W1** |
+| S1 | `relaxed` does not emit `min-age.disabled` or require scripts deny | done |
+| S2 | `strict` raises `registry.unpinned` / `pm.unpinned` to high | done |
 | S3 | `standard` leftover is high, not fixable | done |
 
 ### 3.4 Preflight
@@ -113,7 +113,7 @@ Preset severity:
 | F1 | Missing pnpm → `pm.missing-binary`, info, not fixable | done |
 | F2 | Leftover npm does not need `npm` | done |
 | F3 | Missing yarn/bun/uv for those primaries | **add W2** |
-| F4 | poetry/pip/pipenv do not require a binary | **add W1** |
+| F4 | poetry/pip/pipenv do not require a binary | done |
 | F5 | Two primaries, one missing: warn that one, still check the other | **add W2** |
 
 ### 3.5 Advisories + cache
@@ -129,11 +129,11 @@ Preset severity:
 | A7 | Range / `^` / x-range never become `currentVersion` | done |
 | A8 | uv deprecated + quarantine kinds | done |
 | A9 | poetry + `runOsv` | done |
-| A10 | Live argv: `npm audit --json`, `pnpm audit --json`, `bun audit --json`, `yarn npm audit --json`, `uv audit --output-format json --frozen` | **add W1** (one test, table of argv) |
-| A11 | Runner exit 1 + JSON = success; exit 2 / throw → `{ incomplete: true }` | **add W1** |
-| A12 | Gate: standard ignores moderate/low for exit 1; still listed | **add W1** |
-| A13 | Gate: relaxed only critical fails; strict fails moderate+ | **add W1** |
-| A14 | uv deprecation fails even under relaxed | **add W1** |
+| A10 | Live argv: `npm audit --json`, `pnpm audit --json`, `bun audit --json`, `yarn npm audit --json`, `uv audit --output-format json --frozen` | done |
+| A11 | Runner exit 1 + JSON = success; exit 2 / throw → `{ incomplete: true }` | done |
+| A12 | Gate: standard ignores moderate/low for exit 1; still listed | done |
+| A13 | Gate: relaxed only critical fails; strict fails moderate+ | done |
+| A14 | uv deprecation fails even under relaxed | done |
 | A15 | Disabled manager: no native audit subprocess | **add W2** |
 | A16 | Contract: npm v7 `vulnerabilities` vs classic `advisories` (partially A6) | **add W2** leftover shapes |
 | A17 | Cached findings must not leak another repo’s `path` | **add W2** |
@@ -153,14 +153,14 @@ Preset severity:
 | AS9 | not-git without force skips | done |
 | AS10 | Invalid yaml not overwritten | done |
 | AS11 | Failed git commit → `committed: false` | done |
-| AS12 | Create missing `.npmrc` / `pnpm-workspace.yaml` / `.yarnrc.yml` / `bunfig.toml` / `uv.toml` | **add W1** |
-| AS13 | yarn write `enableScripts: false` | **add W1** |
-| AS14 | bun write `install.ignoreScripts` | **add W1** |
-| AS15 | uv write `exclude-newer` / index-strategy on existing `[tool.uv]` | **add W1** |
-| AS16 | `--force` writes on dirty | **add W1** |
-| AS17 | `--commit` one commit per git root; `git add` only written paths | **add W1** (inject `gitCommit` spy) |
-| AS18 | `lockfile.missing` and `pm.unpinned` are not written | **add W1** |
-| AS19 | Audit without `--apply` does not call `writeFile` | **add W1** |
+| AS12 | Create missing `.npmrc` / `pnpm-workspace.yaml` / `.yarnrc.yml` / `bunfig.toml` / `uv.toml` | done |
+| AS13 | yarn write `enableScripts: false` | done |
+| AS14 | bun write `install.ignoreScripts` | done |
+| AS15 | uv write `exclude-newer` / index-strategy on existing `[tool.uv]` | done |
+| AS16 | `--force` writes on dirty | done |
+| AS17 | `--commit` one commit per git root; `git add` only written paths | done |
+| AS18 | `lockfile.missing` and `pm.unpinned` are not written | done |
+| AS19 | Audit without `--apply` does not call `writeFile` | done |
 
 ### 3.7 Apply advisories
 
@@ -180,7 +180,7 @@ Preset severity:
 | AA12 | Interactive advisories allows major | done |
 | AA13 | Concurrency pools audit, apply serial | done |
 | AA14 | yarn/bun upgrade commands (or explicit no-op documented) | **add W2** or mark out |
-| AA15 | Batch `--apply` never runs uv migrate | **add W1** |
+| AA15 | Batch `--apply` never runs uv migrate | done |
 
 ### 3.8 CLI / exit / reports / interactive
 
@@ -196,14 +196,14 @@ Preset severity:
 | C8 | Default stdin prompt | done |
 | C9 | Stdin leftover lines preserved | done |
 | C10 | `--refresh` / `--no-cache` at CLI | done |
-| C11 | Zero projects discovered → exit 2 | **add W1** |
-| C12 | Advisory subprocess incomplete → exit 2 | **add W1** |
-| C13 | Settings findings below gate (info only) → exit 0 | **add W1** |
+| C11 | Zero projects discovered → exit 2 | done |
+| C12 | Advisory subprocess incomplete → exit 2 | done |
+| C13 | Settings findings below gate (info only) → exit 0 | done |
 | C14 | `--report` writes markdown; omitted → no file | done-ish; **add W2** “no flag, no file” |
 | C15 | `--report` missing parent dir: defined behavior | **add W2** |
 | C16 | `--concurrency 1` serial; default 4; bad value → 4 | **add W2** |
 | C17 | `--force` and `--commit` parsed through `run()` | **add W2** |
-| C18 | Interactive skip writes nothing | **add W1** |
+| C18 | Interactive skip writes nothing | done |
 | C19 | Interactive migrate-to-uv offer: yes converts, no uses OSV | **add W3** (feature may be stub) |
 | C20 | Human summary: repos, settings count, warnings, advisories by severity | done |
 
@@ -218,15 +218,9 @@ Preset severity:
 
 ## 4. Waves
 
-### Wave 1 — close the critical-path holes (do first)
+### Wave 1 — close the critical-path holes (done)
 
-Business + integration only. One test per row, public seams.
-
-1. Settings matrix: npm lock/audit/min-age/registry/pin; pnpm scripts/lock/audit/registry/pin; bun scripts/lock/registry clean+dirty; uv lock/min-age/registry; pip + pipenv `python.not-uv`; relaxed/strict severity.
-2. Discovery: un-git’d tree; requirements.txt; `[project]` pip; uv+poetry leftover.
-3. Advisories: argv table; incomplete runner; preset gates; uv deprecate fails relaxed.
-4. Apply settings: create-if-missing for all five files; yarn/bun/uv writes; `--force`; `--commit` written-paths only; skip `lockfile.missing`/`pm.unpinned`; audit never writes.
-5. CLI: zero projects → 2; incomplete → 2; info-only → 0; interactive skip; `--apply` never migrates.
+161 tests, 0 fail. Remaining work is Wave 2+.
 
 ### Wave 2 — hardening
 

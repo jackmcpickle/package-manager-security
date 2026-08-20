@@ -761,6 +761,47 @@ test("advisory runner dying (non 0/1 exit code) throws an incomplete-tagged erro
   expect((caught as { incomplete?: boolean }).incomplete).toBe(true);
 });
 
+test("live advisory argv is one native command per manager", async () => {
+  const cases: Array<{ name: "npm" | "pnpm" | "yarn" | "bun" | "uv"; argv: string[] }> = [
+    { name: "npm", argv: ["npm", "audit", "--json"] },
+    { name: "pnpm", argv: ["pnpm", "audit", "--json"] },
+    { name: "yarn", argv: ["yarn", "npm", "audit", "--json"] },
+    { name: "bun", argv: ["bun", "audit", "--json"] },
+    { name: "uv", argv: ["uv", "audit", "--output-format", "json", "--frozen"] },
+  ];
+  for (const row of cases) {
+    const calls: string[][] = [];
+    const cache = createFsCache(join(cacheDir8, `argv-${row.name}`), () => 1_000, 86_400_000);
+    await auditAdvisories(
+      {
+        root: `/${row.name}`,
+        gitRoot: `/${row.name}`,
+        managers: [
+          {
+            name: row.name,
+            role: "primary",
+            manifestPath: `/${row.name}/manifest`,
+            lockfilePath: `/${row.name}/lock`,
+            configPath: null,
+          },
+        ],
+      },
+      loadPolicy({}),
+      {
+        cache,
+        now: () => 1_000,
+        digest: () => `${row.name}-argv`,
+        readFile: () => "lock",
+        run: async (argv) => {
+          calls.push(argv);
+          return { code: 0, stdout: "{}", stderr: "" };
+        },
+      },
+    );
+    expect(calls).toEqual([row.argv]);
+  }
+});
+
 test("advisory runner throwing also surfaces an incomplete-tagged error", async () => {
   const cache = createFsCache(join(cacheDir8, "throws"), () => 1_000, 86_400_000);
   const throwsProject: Project = {
