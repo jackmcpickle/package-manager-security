@@ -440,7 +440,7 @@ test("interactive both applies advisories after the settings write dirties the t
         tree = "dirty";
       },
       gitStatus: () => tree,
-      prompt: async () => "both",
+      prompt: async () => "both" as const,
     },
   });
   expect(files["/p/.npmrc"]).toContain("ignore-scripts=true");
@@ -490,7 +490,7 @@ test("interactive advisories choice allows a major upgrade", async () => {
       cache: createFsCache(join(cacheDir, "interactive-major"), () => 1_000, 86_400_000),
       now: () => 1_000,
       gitStatus: () => "clean" as const,
-      prompt: async () => "advisories",
+      prompt: async () => "advisories" as const,
     },
   });
   expect(ran).toContainEqual(["npm", "install", "left-pad@2.0.0", "--save-exact"]);

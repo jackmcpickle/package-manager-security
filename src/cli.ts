@@ -5,7 +5,7 @@ import { auditPath, defaultDigest, type AuditRun } from "./audit";
 import { CACHE_TTL_MS, createFsCache, type Cache } from "./cache";
 import type { ExitCode, Finding, PresetName } from "./domain";
 import { loadPolicy } from "./policy";
-import { formatHuman, formatJson, formatMarkdown, formatSarif } from "./report";
+import { formatApplySkipped, formatHuman, formatJson, formatMarkdown, formatSarif } from "./report";
 
 export async function run(
   argv: string[],
@@ -27,6 +27,7 @@ export async function run(
     readLine?: () => Promise<string>;
     currentVersions?: Record<string, string>;
     fixVersions?: Record<string, string>;
+    color?: boolean;
   },
 ): Promise<{ exitCode: ExitCode }> {
   const stdout = deps?.stdout ?? process.stdout;
@@ -89,6 +90,13 @@ export async function run(
     },
   });
 
+  const color =
+    deps?.color ?? (env.NO_COLOR === undefined && Boolean(process.stdout.isTTY) && deps?.stdout === undefined);
+
+  if (result.skippedDirty.length > 0) {
+    stderr.write(formatApplySkipped(result.skippedDirty, { color }));
+  }
+
   const write = deps?.writeFile ?? writeFile;
   if (flags.report !== undefined) {
     const reportPath = isAbsolute(flags.report) ? flags.report : join(cwd, flags.report);
@@ -96,7 +104,7 @@ export async function run(
   }
   if (flags.json) stdout.write(formatJson(result));
   else if (flags.sarif) stdout.write(formatSarif(result));
-  else stdout.write(formatHuman(result));
+  else stdout.write(formatHuman(result, { color }));
   return { exitCode: result.exitCode };
 }
 

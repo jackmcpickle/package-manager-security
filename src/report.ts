@@ -62,7 +62,29 @@ function sarifLevel(severity: Severity): "error" | "warning" | "note" {
   return "note";
 }
 
-export function formatHuman(result: AuditResult): string {
+const ANSI = {
+  reset: "\u001b[0m",
+  bold: "\u001b[1m",
+  dim: "\u001b[2m",
+  red: "\u001b[31m",
+  yellow: "\u001b[33m",
+  cyan: "\u001b[36m",
+};
+
+const SEVERITY_PAINT: Record<Severity, string> = {
+  critical: ANSI.bold + ANSI.red,
+  high: ANSI.red,
+  moderate: ANSI.yellow,
+  low: ANSI.dim,
+  info: ANSI.dim,
+};
+
+function paint(text: string, code: string, on: boolean): string {
+  return on ? `${code}${text}${ANSI.reset}` : text;
+}
+
+export function formatHuman(result: AuditResult, opts?: { color?: boolean }): string {
+  const color = opts?.color ?? false;
   const findings = result.projects.flatMap((row) => row.findings);
   const settingsCount = findings.filter(
     (finding) => finding.kind !== "missing-binary" && !ADVISORY_KINDS.has(finding.kind),
@@ -70,19 +92,37 @@ export function formatHuman(result: AuditResult): string {
   const warningsCount = findings.filter((finding) => finding.kind === "missing-binary").length;
   const advisoryCounts = countAdvisories(findings);
   const lines = [
-    `repos scanned: ${countRepos(result.projects)}`,
-    `settings findings: ${settingsCount}`,
-    `warnings: ${warningsCount}`,
-    `advisories: ${SEVERITIES.map((severity) => `${severity} ${advisoryCounts[severity]}`).join(", ")}`,
+    `repos scanned: ${paint(String(countRepos(result.projects)), ANSI.bold, color)}`,
+    `settings findings: ${paint(String(settingsCount), ANSI.bold, color)}`,
+    `warnings: ${paint(String(warningsCount), ANSI.bold, color)}`,
+    `advisories: ${SEVERITIES.map(
+      (severity) =>
+        `${paint(severity, advisoryCounts[severity] > 0 ? SEVERITY_PAINT[severity] : ANSI.dim, color)} ${advisoryCounts[severity]}`,
+    ).join(", ")}`,
   ];
   for (const { project, findings: projectFindings } of result.projects) {
     lines.push("");
-    lines.push(project.root);
+    lines.push(paint(project.root, ANSI.bold, color));
     for (const finding of projectFindings) {
-      lines.push(`  ${finding.code}  ${finding.severity}  ${finding.message}`);
+      lines.push(
+        `  ${paint(finding.code, ANSI.cyan, color)}  ${paint(finding.severity, SEVERITY_PAINT[finding.severity], color)}  ${finding.message}`,
+      );
     }
   }
   return `${lines.join("\n")}\n`;
+}
+
+export function formatApplySkipped(roots: string[], opts?: { color?: boolean }): string {
+  const color = opts?.color ?? false;
+  return roots
+    .map((root) =>
+      paint(
+        `apply skipped: dirty git tree at ${root} (commit your changes or use --force)\n`,
+        ANSI.yellow,
+        color,
+      ),
+    )
+    .join("");
 }
 
 function countAdvisories(findings: Finding[]): Record<Severity, number> {

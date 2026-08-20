@@ -29,6 +29,7 @@ const GATE_RANK: Record<PresetName, number> = {
 export type AuditResult = {
   exitCode: ExitCode;
   projects: Array<{ project: Project; findings: Finding[] }>;
+  skippedDirty: string[];
 };
 
 export type AuditRun = (
@@ -81,7 +82,7 @@ export async function auditPath(
 
   let policyFailure = false;
   let incomplete = false;
-  let applySkippedDirty = false;
+  const skippedDirty = new Set<string>();
   const projects: AuditResult["projects"] = [];
   const pendingApply: ApplySettingsItem[] = [];
   const concurrency = Math.max(1, input.concurrency);
@@ -145,7 +146,7 @@ export async function auditPath(
         advisoryCount: row.findings.filter((finding) => isAdvisoryKind(finding.kind)).length,
       });
       const dirty = await applyChoice(row, choice, input, appliedRoots);
-      if (dirty) applySkippedDirty = true;
+      if (dirty) skippedDirty.add(row.project.gitRoot ?? row.project.root);
     }
   } else {
     const appliedRoots = new Set<string>();
@@ -159,7 +160,9 @@ export async function auditPath(
           force: input.force ?? false,
           commit: input.commit ?? false,
         });
-        if (applied.skipped === "dirty") applySkippedDirty = true;
+        if (applied.skipped === "dirty") {
+          skippedDirty.add(group[0]!.project.gitRoot ?? group[0]!.project.root);
+        }
         if (applied.written.length > 0) {
           appliedRoots.add(group[0]!.project.gitRoot ?? group[0]!.project.root);
         }
@@ -168,16 +171,16 @@ export async function auditPath(
     if (input.applyAdvisories) {
       for (const row of audited) {
         const dirty = await applyProjectAdvisories(row, input, appliedRoots);
-        if (dirty) applySkippedDirty = true;
+        if (dirty) skippedDirty.add(row.project.gitRoot ?? row.project.root);
       }
     }
   }
 
   let exitCode: ExitCode = 0;
-  if (projects.length === 0 || incomplete || applySkippedDirty) exitCode = 2;
+  if (projects.length === 0 || incomplete || skippedDirty.size > 0) exitCode = 2;
   else if (policyFailure) exitCode = 1;
 
-  return { exitCode, projects };
+  return { exitCode, projects, skippedDirty: [...skippedDirty] };
 }
 
 type AuditedProject = {

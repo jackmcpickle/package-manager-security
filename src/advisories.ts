@@ -167,7 +167,7 @@ function parseJson(stdout: string): unknown {
 }
 
 function incompleteError(): Error & { incomplete: true } {
-  return Object.assign(new Error("advisory audit incomplete"), { incomplete: true });
+  return Object.assign(new Error("advisory audit incomplete"), { incomplete: true as const });
 }
 
 function mapAuditJson(

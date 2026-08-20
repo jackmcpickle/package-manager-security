@@ -11,6 +11,7 @@ test("formatHuman includes repos scanned, settings findings count, and warnings 
   };
   const text = formatHuman({
     exitCode: 1,
+    skippedDirty: [],
     projects: [
       {
         project,
@@ -46,6 +47,7 @@ test("formatHuman includes repos scanned, settings findings count, and warnings 
 test("formatHuman counts unique git roots as repos scanned", () => {
   const text = formatHuman({
     exitCode: 0,
+    skippedDirty: [],
     projects: [
       {
         project: { root: "/repo/packages/a", gitRoot: "/repo", managers: [] },
@@ -63,6 +65,7 @@ test("formatHuman counts unique git roots as repos scanned", () => {
 test("formatHuman counts advisories by severity separately from settings", () => {
   const text = formatHuman({
     exitCode: 1,
+    skippedDirty: [],
     projects: [
       {
         project: { root: "/p", gitRoot: "/p", managers: [] },
@@ -105,6 +108,7 @@ test("formatHuman counts advisories by severity separately from settings", () =>
 
 const sampleResult: AuditResult = {
   exitCode: 1,
+  skippedDirty: [],
   projects: [
     {
       project: { root: "/p", gitRoot: "/p", managers: [] },
@@ -135,4 +139,12 @@ test("format sarif includes finding codes from the same result", () => {
   expect(sarif).toContain("scripts.unrestricted");
   const parsed = JSON.parse(sarif) as { version: string };
   expect(parsed.version).toBe("2.1.0");
+});
+
+test("formatHuman with color wraps output in ANSI escapes; plain has none", () => {
+  const colored = formatHuman(sampleResult, { color: true });
+  expect(colored).toContain("\u001b[");
+  expect(colored).toContain("scripts.unrestricted");
+  const plain = formatHuman(sampleResult);
+  expect(plain).not.toContain("\u001b[");
 });

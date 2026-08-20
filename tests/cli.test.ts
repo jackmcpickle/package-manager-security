@@ -348,7 +348,7 @@ test("interactive fake prompt can choose settings only", async () => {
     prompt: async ({ project, settingsCount, advisoryCount }) => {
       expect(project.root).toContain("alpha");
       prompts.push({ settingsCount, advisoryCount });
-      return "settings";
+      return "settings" as const;
     },
   });
   expect(prompts).toHaveLength(1);
@@ -503,5 +503,59 @@ test("stdin line reader keeps leftover lines after the first newline", async () 
   expect(await readLine()).toBe("settings");
   expect(await readLine()).toBe("skip");
   expect(chunks).toEqual([]);
+});
+
+test("--apply on a dirty tree warns on stderr and exits 2", async () => {
+  const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const result = await run(["audit", root, "--apply"], {
+    stdout: { write: (s: string) => stdout.push(s) },
+    stderr: { write: (s: string) => stderr.push(s) },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "dirty-warn"), () => 1_000, 86_400_000),
+    gitStatus: () => "dirty",
+    writeFile: () => {
+      throw new Error("must not write on a dirty tree");
+    },
+  });
+  expect(result.exitCode).toBe(2);
+  const err = stderr.join("");
+  expect(err).toContain("apply skipped");
+  expect(err).toContain("dirty");
+  expect(err).toContain("--force");
+  expect(err).toContain(root);
+});
+
+test("stdout uses ANSI colors when color is enabled and none by default", async () => {
+  const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
+  const colored: string[] = [];
+  await run(["audit", root], {
+    stdout: { write: (s: string) => colored.push(s) },
+    stderr: { write: () => {} },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "color-on"), () => 1_000, 86_400_000),
+    color: true,
+  });
+  expect(colored.join("")).toContain("\u001b[");
+  expect(colored.join("")).toContain("scripts.unrestricted");
+
+  const plain: string[] = [];
+  await run(["audit", root], {
+    stdout: { write: (s: string) => plain.push(s) },
+    stderr: { write: () => {} },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "color-off"), () => 1_000, 86_400_000),
+  });
+  expect(plain.join("")).not.toContain("\u001b[");
 });
 

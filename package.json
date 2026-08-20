@@ -34,11 +34,15 @@
   },
   "scripts": {
     "test": "bun test",
+    "typecheck": "tsc --noEmit",
     "build": "bun build ./src/main.ts --target=bun --banner '#!/usr/bin/env bun' --outfile dist/pmsec.js",
     "build:binary": "bun build ./src/main.ts --compile --outfile dist/pmsec",
     "prepublishOnly": "bun test && bun run build"
   },
   "dependencies": {
     "smol-toml": "^1.8.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14"
   }
 }
