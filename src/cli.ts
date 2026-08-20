@@ -21,7 +21,7 @@ export async function run(
     digest?: (lockfileBytes: string) => string;
     writeFile?: (path: string, body: string) => void;
     gitStatus?: (root: string) => "clean" | "dirty" | "not-git";
-    gitCommit?: (root: string, message: string) => void;
+    gitCommit?: (root: string, message: string, files: string[]) => boolean;
   },
 ): Promise<{ exitCode: ExitCode }> {
   const stdout = deps?.stdout ?? process.stdout;
@@ -179,9 +179,18 @@ function defaultGitStatus(root: string): "clean" | "dirty" | "not-git" {
   return stdout === "" ? "clean" : "dirty";
 }
 
-function defaultGitCommit(root: string, message: string): void {
-  Bun.spawnSync(["git", "-C", root, "add", "-A"], { stdout: "pipe", stderr: "pipe" });
-  Bun.spawnSync(["git", "-C", root, "commit", "-m", message], { stdout: "pipe", stderr: "pipe" });
+function defaultGitCommit(root: string, message: string, files: string[]): boolean {
+  if (files.length === 0) return false;
+  const add = Bun.spawnSync(["git", "-C", root, "add", "--", ...files], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (add.exitCode !== 0) return false;
+  const commit = Bun.spawnSync(["git", "-C", root, "commit", "-m", message], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return commit.exitCode === 0;
 }
 
 async function defaultRun(

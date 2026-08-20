@@ -12,10 +12,18 @@ export type ApplySettingsDeps = {
   readFile: (path: string) => string | null;
   writeFile: (path: string, body: string) => void;
   gitStatus: (root: string) => "clean" | "dirty" | "not-git";
-  gitCommit?: (root: string, message: string) => void;
+  gitCommit?: (root: string, message: string, files: string[]) => boolean;
   force: boolean;
   commit: boolean;
 };
+
+export type ApplySettingsItem = {
+  project: Project;
+  findings: Finding[];
+  policy: Policy;
+};
+
+const COMMIT_MESSAGE = "chore: apply pmsec security settings";
 
 type ResolvedSettings = {
   minReleaseAgeDays: number;
@@ -30,35 +38,53 @@ export function applySettings(
   policy: Policy,
   deps: ApplySettingsDeps,
 ): ApplyResult {
-  const gitRoot = project.gitRoot ?? project.root;
-  if (deps.gitStatus(gitRoot) === "dirty" && !deps.force) {
+  return applySettingsGroup([{ project, findings, policy }], deps);
+}
+
+export function applySettingsGroup(items: ApplySettingsItem[], deps: ApplySettingsDeps): ApplyResult {
+  if (items.length === 0) return { written: [], skipped: "nothing", committed: false };
+
+  const gitRoot = items[0]!.project.gitRoot ?? items[0]!.project.root;
+  if (!deps.force && deps.gitStatus(gitRoot) !== "clean") {
     return { written: [], skipped: "dirty", committed: false };
   }
 
-  const targets = collectTargets(project, findings, deps.readFile);
-  if (targets.size === 0) {
+  const written: string[] = [];
+  for (const item of items) {
+    written.push(...writeSettings(item.project, item.findings, item.policy, deps));
+  }
+
+  if (written.length === 0) {
     return { written: [], skipped: "nothing", committed: false };
   }
 
+  let committed = false;
+  if (deps.commit && deps.gitCommit) {
+    committed = deps.gitCommit(gitRoot, COMMIT_MESSAGE, written) === true;
+  }
+
+  return { written, skipped: null, committed };
+}
+
+function writeSettings(
+  project: Project,
+  findings: Finding[],
+  policy: Policy,
+  deps: ApplySettingsDeps,
+): string[] {
   const written: string[] = [];
-  for (const [path, target] of targets) {
+  for (const [path, target] of collectTargets(project, findings, deps.readFile)) {
     const next = renderConfig(
       target.manager,
       deps.readFile(path) ?? "",
       target.codes,
       resolveSettings(policy, target.manager),
     );
+    if (next === null) continue;
     deps.writeFile(path, next);
     written.push(path);
   }
-
-  let committed = false;
-  if (deps.commit && deps.gitCommit && written.length > 0 && deps.gitStatus(gitRoot) !== "not-git") {
-    deps.gitCommit(gitRoot, "chore: apply pmsec security settings");
-    committed = true;
-  }
-
-  return { written, skipped: null, committed };
+  return written;
 }
 
 function collectTargets(
@@ -133,7 +159,7 @@ function renderConfig(
   raw: string,
   codes: Set<string>,
   settings: ResolvedSettings,
-): string {
+): string | null {
   if (manager === "npm") return mergeNpmrc(raw, codes, settings);
   if (manager === "pnpm") return mergePnpmYaml(raw, codes, settings);
   if (manager === "yarn") return mergeYarnYaml(raw, codes);
@@ -172,8 +198,10 @@ function mergeNpmrc(raw: string, codes: Set<string>, settings: ResolvedSettings)
   return `${out.join("\n")}\n`;
 }
 
-function mergePnpmYaml(raw: string, codes: Set<string>, settings: ResolvedSettings): string {
-  const yaml = parseYaml(raw);
+function mergePnpmYaml(raw: string, codes: Set<string>, settings: ResolvedSettings): string | null {
+  const parsed = parseYaml(raw);
+  if (!parsed.ok) return null;
+  const yaml = parsed.value;
   if (codes.has("scripts.unrestricted")) {
     yaml.dangerouslyAllowAllBuilds = false;
     if (yaml.onlyBuiltDependencies === undefined && yaml.neverBuiltDependencies === undefined) {
@@ -191,8 +219,10 @@ function mergePnpmYaml(raw: string, codes: Set<string>, settings: ResolvedSettin
   return stringifyYaml(yaml);
 }
 
-function mergeYarnYaml(raw: string, codes: Set<string>): string {
-  const yaml = parseYaml(raw);
+function mergeYarnYaml(raw: string, codes: Set<string>): string | null {
+  const parsed = parseYaml(raw);
+  if (!parsed.ok) return null;
+  const yaml = parsed.value;
   if (codes.has("scripts.unrestricted")) yaml.enableScripts = false;
   if (codes.has("audit.disabled")) {
     delete yaml.audit;
@@ -205,8 +235,10 @@ function mergeYarnYaml(raw: string, codes: Set<string>): string {
   return stringifyYaml(yaml);
 }
 
-function mergeBunfig(raw: string, codes: Set<string>): string {
-  const table = parseTomlObject(raw);
+function mergeBunfig(raw: string, codes: Set<string>): string | null {
+  const parsed = parseTomlObject(raw);
+  if (!parsed.ok) return null;
+  const table = parsed.value;
   const install = isPlainObject(table.install) ? table.install : {};
   if (codes.has("scripts.unrestricted")) install.ignoreScripts = true;
   if (codes.has("registry.unpinned") && !bunRegistryPinned(install)) {
@@ -216,8 +248,10 @@ function mergeBunfig(raw: string, codes: Set<string>): string {
   return `${stringifyToml(table).trimEnd()}\n`;
 }
 
-function mergeUv(raw: string, codes: Set<string>, settings: ResolvedSettings): string {
-  const table = parseTomlObject(raw);
+function mergeUv(raw: string, codes: Set<string>, settings: ResolvedSettings): string | null {
+  const parsed = parseTomlObject(raw);
+  if (!parsed.ok) return null;
+  const table = parsed.value;
   const target = uvWriteTable(table);
   if (codes.has("min-age.disabled")) {
     target["exclude-newer"] = new Date(
@@ -250,13 +284,15 @@ function resolveSettings(policy: Policy, name: PackageManager): ResolvedSettings
   };
 }
 
-function parseYaml(raw: string): Record<string, unknown> {
-  if (raw.trim() === "") return {};
+type ParsedTable = { ok: true; value: Record<string, unknown> } | { ok: false };
+
+function parseYaml(raw: string): ParsedTable {
+  if (raw.trim() === "") return { ok: true, value: {} };
   try {
     const parsed: unknown = Bun.YAML.parse(raw);
-    return isPlainObject(parsed) ? parsed : {};
+    return isPlainObject(parsed) ? { ok: true, value: parsed } : { ok: false };
   } catch {
-    return {};
+    return { ok: false };
   }
 }
 
@@ -292,19 +328,20 @@ function yamlScalar(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function parseTomlObject(raw: string): Record<string, unknown> {
-  if (raw.trim() === "") return {};
+function parseTomlObject(raw: string): ParsedTable {
+  if (raw.trim() === "") return { ok: true, value: {} };
   try {
     const parsed: unknown = parseToml(raw);
-    return isPlainObject(parsed) ? parsed : {};
+    return isPlainObject(parsed) ? { ok: true, value: parsed } : { ok: false };
   } catch {
-    return {};
+    return { ok: false };
   }
 }
 
 function hasToolUv(raw: string): boolean {
-  const table = parseTomlObject(raw);
-  const tool = isPlainObject(table.tool) ? table.tool : {};
+  const parsed = parseTomlObject(raw);
+  if (!parsed.ok) return false;
+  const tool = isPlainObject(parsed.value.tool) ? parsed.value.tool : {};
   return isPlainObject(tool.uv);
 }
 

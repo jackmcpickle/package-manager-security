@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { parse } from "smol-toml";
 import { auditAdvisories } from "./advisories";
-import { applySettings } from "./apply-settings";
+import { applySettingsGroup, type ApplySettingsItem } from "./apply-settings";
 import type { Cache } from "./cache";
 import { CACHE_TTL_MS, createFsCache } from "./cache";
 import { discoverProjects } from "./discover";
@@ -58,7 +58,7 @@ export async function auditPath(
       digest?: (lockfileBytes: string) => string;
       writeFile?: (path: string, body: string) => void;
       gitStatus?: (root: string) => "clean" | "dirty" | "not-git";
-      gitCommit?: (root: string, message: string) => void;
+      gitCommit?: (root: string, message: string, files: string[]) => boolean;
     };
   },
 ): Promise<AuditResult> {
@@ -76,6 +76,7 @@ export async function auditPath(
   let incomplete = false;
   let applySkippedDirty = false;
   const projects: AuditResult["projects"] = [];
+  const pendingApply: ApplySettingsItem[] = [];
 
   for (const project of discovered) {
     const repoToml = deps.readFile(join(project.root, ".pmsec.toml")) ?? undefined;
@@ -107,7 +108,17 @@ export async function auditPath(
     }
 
     if (apply && deps.writeFile && deps.gitStatus) {
-      const applied = applySettings(project, findings, projectPolicy, {
+      pendingApply.push({ project, findings, policy: projectPolicy });
+    }
+
+    const gate = GATE_RANK[projectPolicy.preset];
+    if (findings.some((finding) => failsGate(finding, gate))) policyFailure = true;
+    projects.push({ project, findings });
+  }
+
+  if (apply && deps.writeFile && deps.gitStatus) {
+    for (const group of groupByGitRoot(pendingApply)) {
+      const applied = applySettingsGroup(group, {
         readFile: deps.readFile,
         writeFile: deps.writeFile,
         gitStatus: deps.gitStatus,
@@ -117,10 +128,6 @@ export async function auditPath(
       });
       if (applied.skipped === "dirty") applySkippedDirty = true;
     }
-
-    const gate = GATE_RANK[projectPolicy.preset];
-    if (findings.some((finding) => failsGate(finding, gate))) policyFailure = true;
-    projects.push({ project, findings });
   }
 
   let exitCode: ExitCode = 0;
@@ -175,4 +182,15 @@ function isIncomplete(error: unknown): boolean {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function groupByGitRoot(items: ApplySettingsItem[]): ApplySettingsItem[][] {
+  const groups = new Map<string, ApplySettingsItem[]>();
+  for (const item of items) {
+    const key = item.project.gitRoot ?? item.project.root;
+    const group = groups.get(key) ?? [];
+    group.push(item);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
 }
