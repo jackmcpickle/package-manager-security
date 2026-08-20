@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { parse as parseTomlRaw } from "smol-toml";
 import type {
   DetectedManager,
   Finding,
@@ -45,6 +46,10 @@ export function auditSettings(
       findings.push(leftoverFinding(manager));
       continue;
     }
+    if (manager.role === "unsupported") {
+      findings.push(unsupportedFinding(manager));
+      continue;
+    }
     if (manager.role !== "primary") continue;
     if (!policy.enabledManagers.includes(manager.name)) continue;
 
@@ -52,6 +57,12 @@ export function auditSettings(
       findings.push(...auditNpm(project, manager, policy, readFile));
     } else if (manager.name === "pnpm") {
       findings.push(...auditPnpm(project, manager, policy, readFile));
+    } else if (manager.name === "yarn") {
+      findings.push(...auditYarn(project, manager, policy, readFile));
+    } else if (manager.name === "bun") {
+      findings.push(...auditBun(project, manager, policy, readFile));
+    } else if (manager.name === "uv") {
+      findings.push(...auditUv(project, manager, policy, readFile));
     }
   }
 
@@ -63,6 +74,18 @@ function leftoverFinding(manager: DetectedManager): Finding {
     kind: "leftover-lockfile",
     code: "lockfile.leftover",
     message: `Leftover ${manager.name} lockfile is not an apply target`,
+    severity: "high",
+    path: manager.lockfilePath ?? manager.manifestPath,
+    fixable: false,
+    manager: manager.name,
+  };
+}
+
+function unsupportedFinding(manager: DetectedManager): Finding {
+  return {
+    kind: "unsupported-pm",
+    code: "pm.unsupported",
+    message: `${manager.name} is unsupported`,
     severity: "high",
     path: manager.lockfilePath ?? manager.manifestPath,
     fixable: false,
@@ -259,6 +282,181 @@ function auditPnpm(
   return findings;
 }
 
+function auditYarn(
+  project: Project,
+  manager: DetectedManager,
+  policy: Policy,
+  readFile: ReadFile,
+): Finding[] {
+  const settings = resolveSettings(policy, "yarn");
+  const yarnrcPath = manager.configPath ?? `${project.root}/.yarnrc.yml`;
+  const yarnrc = parseYaml(readFile(yarnrcPath) ?? "");
+  const findings: Finding[] = [];
+
+  if (settings.ignoreScripts && yarnrc["enableScripts"] !== false) {
+    findings.push(
+      setting(
+        "scripts.unrestricted",
+        "yarn enableScripts must be false",
+        "high",
+        yarnrcPath,
+        "yarn",
+      ),
+    );
+  }
+
+  if (settings.requireLockfile && !lockfilePresent(manager, readFile, `${project.root}/yarn.lock`)) {
+    findings.push(
+      setting(
+        "lockfile.missing",
+        "yarn.lock is required",
+        "high",
+        manager.lockfilePath ?? `${project.root}/yarn.lock`,
+        "yarn",
+      ),
+    );
+  }
+
+  if (yarnAuditDisabled(yarnrc)) {
+    findings.push(
+      setting(
+        "audit.disabled",
+        "yarn audit must not be disabled",
+        "high",
+        yarnrcPath,
+        "yarn",
+      ),
+    );
+  }
+
+  if (!hasText(yarnrc["npmRegistryServer"])) {
+    findings.push(
+      setting(
+        "registry.unpinned",
+        "npmRegistryServer must be set",
+        pinSeverity(policy.preset),
+        yarnrcPath,
+        "yarn",
+      ),
+    );
+  }
+
+  if (settings.requirePmPin && !packageManagerYarnBerry(readFile(manager.manifestPath))) {
+    findings.push(
+      setting(
+        "pm.unpinned",
+        "package.json packageManager must be yarn@ major >= 2",
+        pinSeverity(policy.preset),
+        manager.manifestPath,
+        "yarn",
+      ),
+    );
+  }
+
+  return findings;
+}
+
+function auditBun(
+  project: Project,
+  manager: DetectedManager,
+  policy: Policy,
+  readFile: ReadFile,
+): Finding[] {
+  const settings = resolveSettings(policy, "bun");
+  const bunfigPath = manager.configPath ?? `${project.root}/bunfig.toml`;
+  const bunfig = parseToml(readFile(bunfigPath) ?? "");
+  const install = isPlainObject(bunfig["install"]) ? bunfig["install"] : {};
+  const findings: Finding[] = [];
+
+  if (settings.ignoreScripts && bunScriptsUnrestricted(bunfig, install)) {
+    findings.push(
+      setting(
+        "scripts.unrestricted",
+        "bun scripts must be restricted",
+        "high",
+        bunfigPath,
+        "bun",
+      ),
+    );
+  }
+
+  if (settings.requireLockfile && !bunLockfilePresent(project, manager, readFile)) {
+    findings.push(
+      setting(
+        "lockfile.missing",
+        "bun.lock or bun.lockb is required",
+        "high",
+        manager.lockfilePath ?? `${project.root}/bun.lock`,
+        "bun",
+      ),
+    );
+  }
+
+  if (!bunRegistryPinned(install)) {
+    findings.push(
+      setting(
+        "registry.unpinned",
+        "install.registry must be set",
+        pinSeverity(policy.preset),
+        bunfigPath,
+        "bun",
+      ),
+    );
+  }
+
+  return findings;
+}
+
+function auditUv(
+  project: Project,
+  manager: DetectedManager,
+  policy: Policy,
+  readFile: ReadFile,
+): Finding[] {
+  const settings = resolveSettings(policy, "uv");
+  const cfg = readUvConfig(project, readFile);
+  const configPath = manager.configPath ?? `${project.root}/pyproject.toml`;
+  const findings: Finding[] = [];
+
+  if (settings.requireLockfile && !lockfilePresent(manager, readFile, `${project.root}/uv.lock`)) {
+    findings.push(
+      setting(
+        "lockfile.missing",
+        "uv.lock is required",
+        "high",
+        manager.lockfilePath ?? `${project.root}/uv.lock`,
+        "uv",
+      ),
+    );
+  }
+
+  if (settings.minReleaseAgeDays > 0 && !uvExcludeNewerMeets(cfg["exclude-newer"], settings.minReleaseAgeDays)) {
+    findings.push(
+      setting(
+        "min-age.disabled",
+        `exclude-newer must meet ${settings.minReleaseAgeDays} days`,
+        "high",
+        configPath,
+        "uv",
+      ),
+    );
+  }
+
+  if (policy.preset === "strict" && uvHasExtraIndexes(cfg) && cfg["index-strategy"] !== "first-index") {
+    findings.push(
+      setting(
+        "registry.unpinned",
+        'extra indexes require index-strategy = "first-index"',
+        pinSeverity(policy.preset),
+        configPath,
+        "uv",
+      ),
+    );
+  }
+
+  return findings;
+}
+
 function setting(
   code: string,
   message: string,
@@ -396,6 +594,107 @@ function hasText(value: unknown): boolean {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function yarnAuditDisabled(yarnrc: Record<string, unknown>): boolean {
+  return (
+    yarnrc["audit"] === false ||
+    yarnrc["npmAudit"] === false ||
+    yarnrc["enableNpmAudit"] === false
+  );
+}
+
+function packageManagerYarnBerry(raw: string | null): boolean {
+  if (raw === null) return false;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isPlainObject(parsed)) return false;
+    const field = parsed.packageManager;
+    if (typeof field !== "string" || !field.startsWith("yarn@")) return false;
+    const major = Number.parseInt(field.slice("yarn@".length), 10);
+    return Number.isFinite(major) && major >= 2;
+  } catch {
+    return false;
+  }
+}
+
+function bunScriptsUnrestricted(
+  bunfig: Record<string, unknown>,
+  install: Record<string, unknown>,
+): boolean {
+  if (bunAutoAllowsScripts(install["auto"])) return true;
+  const hasTrusted =
+    bunfig["trustedDependencies"] !== undefined || install["trustedDependencies"] !== undefined;
+  const hasSecurity = isPlainObject(install["security"]);
+  const denyScripts =
+    bunfig["ignoreScripts"] === true ||
+    install["ignoreScripts"] === true ||
+    bunfig["ignore-scripts"] === true ||
+    install["ignore-scripts"] === true;
+  return !hasTrusted && !hasSecurity && !denyScripts;
+}
+
+function bunAutoAllowsScripts(auto: unknown): boolean {
+  if (auto === true) return true;
+  if (typeof auto !== "string") return false;
+  const value = auto.trim().toLowerCase();
+  return value === "auto" || value === "force" || value === "fallback" || value === "true" || value === "all";
+}
+
+function bunRegistryPinned(install: Record<string, unknown>): boolean {
+  const registry = install["registry"];
+  if (hasText(registry)) return true;
+  return isPlainObject(registry) && hasText(registry["url"]);
+}
+
+function bunLockfilePresent(project: Project, manager: DetectedManager, readFile: ReadFile): boolean {
+  if (manager.lockfilePath !== null && readFile(manager.lockfilePath) !== null) return true;
+  return (
+    readFile(`${project.root}/bun.lock`) !== null || readFile(`${project.root}/bun.lockb`) !== null
+  );
+}
+
+function parseToml(raw: string): Record<string, unknown> {
+  if (raw.trim() === "") return {};
+  try {
+    const parsed: unknown = parseTomlRaw(raw);
+    return isPlainObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function readUvConfig(project: Project, readFile: ReadFile): Record<string, unknown> {
+  const pyproject = parseToml(readFile(`${project.root}/pyproject.toml`) ?? "");
+  const tool = isPlainObject(pyproject["tool"]) ? pyproject["tool"] : {};
+  const toolUv = isPlainObject(tool["uv"]) ? tool["uv"] : {};
+  const uvToml = parseToml(readFile(`${project.root}/uv.toml`) ?? "");
+  return { ...toolUv, ...uvToml };
+}
+
+function uvExcludeNewerMeets(value: unknown, minDays: number): boolean {
+  if (typeof value === "number" && Number.isFinite(value)) return value >= minDays;
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed === "") return false;
+  const asNumber = Number(trimmed);
+  if (Number.isFinite(asNumber) && trimmed === String(asNumber)) return asNumber >= minDays;
+  if (/[tT-]/.test(trimmed)) {
+    const ts = Date.parse(trimmed);
+    if (!Number.isNaN(ts)) return Date.now() - ts >= minDays * 86_400_000;
+  }
+  const hours = parsePnpmAgeHours(trimmed);
+  return hours !== null && hours / 24 >= minDays;
+}
+
+function uvHasExtraIndexes(cfg: Record<string, unknown>): boolean {
+  const extra = cfg["extra-index-url"];
+  if (typeof extra === "string" && extra.trim() !== "") return true;
+  if (Array.isArray(extra) && extra.length > 0) return true;
+  const index = cfg["index"];
+  if (!Array.isArray(index)) return false;
+  if (index.length > 1) return true;
+  return index.some((entry) => isPlainObject(entry) && entry["default"] !== true);
 }
 
 function defaultReadFile(path: string): string | null {

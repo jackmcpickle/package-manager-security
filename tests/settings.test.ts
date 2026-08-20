@@ -76,3 +76,55 @@ test("leftover npm lockfile is a leftover finding and is not fixable", () => {
   expect(leftover?.fixable).toBe(false);
   expect(leftover?.severity).toBe("high");
 });
+
+test("yarn v1 is unsupported and not fixable", () => {
+  const project: Project = {
+    root: "/y",
+    gitRoot: "/y",
+    managers: [
+      {
+        name: "yarn",
+        role: "unsupported",
+        manifestPath: "/y/package.json",
+        lockfilePath: "/y/yarn.lock",
+        configPath: null,
+      },
+    ],
+  };
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => (p.endsWith("package.json") ? `{"name":"y"}` : null),
+  });
+  expect(findings).toEqual([
+    expect.objectContaining({
+      code: "pm.unsupported",
+      fixable: false,
+      severity: "high",
+      kind: "unsupported-pm",
+    }),
+  ]);
+});
+
+test("yarn berry without enableScripts false is unrestricted under standard", () => {
+  const project: Project = {
+    root: "/y",
+    gitRoot: "/y",
+    managers: [
+      {
+        name: "yarn",
+        role: "primary",
+        manifestPath: "/y/package.json",
+        lockfilePath: "/y/yarn.lock",
+        configPath: "/y/.yarnrc.yml",
+      },
+    ],
+  };
+  const files: Record<string, string> = {
+    "/y/package.json": `{"name":"y","packageManager":"yarn@4.5.0"}`,
+    "/y/yarn.lock": "# yarn lockfile v1\n",
+    "/y/.yarnrc.yml": `nodeLinker: node-modules\n`,
+  };
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "scripts.unrestricted")).toBe(true);
+});
