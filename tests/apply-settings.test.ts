@@ -295,7 +295,8 @@ test("two npm/pnpm roots sharing a gitRoot both get written without force", asyn
     },
   });
   expect(files["/repo/a/.npmrc"]).toContain("ignore-scripts=true");
-  expect(files["/repo/b/pnpm-workspace.yaml"]).toContain("onlyBuiltDependencies");
+  expect(files["/repo/b/pnpm-workspace.yaml"]).toContain("allowBuilds: {}");
+  expect(files["/repo/b/pnpm-workspace.yaml"]).toContain("minimumReleaseAge: 10080");
   expect(commits).toEqual([
     {
       root: "/repo",
@@ -380,7 +381,7 @@ test("apply writes enableScripts: false to .yarnrc.yml preserving existing keys"
     ],
   };
   const findings = auditSettings(project, loadPolicy({}), { readFile: (p) => files[p] ?? null });
-  expect(findings.map((f) => f.code)).toEqual(["scripts.unrestricted"]);
+  expect(findings.map((f) => f.code)).toEqual(["scripts.unrestricted", "min-age.disabled"]);
   const result = applySettings(project, findings, loadPolicy({}), {
     readFile: (p) => files[p] ?? null,
     writeFile: (p, b) => {
@@ -393,6 +394,8 @@ test("apply writes enableScripts: false to .yarnrc.yml preserving existing keys"
   expect(result.skipped).toBeNull();
   expect(result.written).toContain("/p/.yarnrc.yml");
   expect(files["/p/.yarnrc.yml"]).toContain("enableScripts: false");
+  // standard preset is 7 days, and yarn reads the gate in minutes.
+  expect(files["/p/.yarnrc.yml"]).toContain("npmMinimalAgeGate: 10080");
   expect(files["/p/.yarnrc.yml"]).toContain("npmRegistryServer");
 });
 
@@ -416,7 +419,7 @@ test("apply writes ignoreScripts to bunfig.toml preserving existing content", ()
     ],
   };
   const findings = auditSettings(project, loadPolicy({}), { readFile: (p) => files[p] ?? null });
-  expect(findings.map((f) => f.code)).toEqual(["scripts.unrestricted"]);
+  expect(findings.map((f) => f.code)).toEqual(["scripts.unrestricted", "min-age.disabled"]);
   const result = applySettings(project, findings, loadPolicy({}), {
     readFile: (p) => files[p] ?? null,
     writeFile: (p, b) => {
@@ -429,6 +432,8 @@ test("apply writes ignoreScripts to bunfig.toml preserving existing content", ()
   expect(result.skipped).toBeNull();
   expect(result.written).toContain("/p/bunfig.toml");
   expect(files["/p/bunfig.toml"]).toContain("ignoreScripts = true");
+  // standard preset is 7 days, and bun reads the gate in seconds.
+  expect(files["/p/bunfig.toml"]).toContain("minimumReleaseAge = 604800");
   expect(files["/p/bunfig.toml"]).toContain("registry = \"https://registry.npmjs.org/\"");
 });
 
@@ -575,6 +580,197 @@ test("apply performs no writes when only non-fixable findings are present", () =
   });
   expect(result.written).toEqual([]);
   expect(result.skipped).toBe("nothing");
+});
+
+test("apply with --force writes on a dirty tree", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/package-lock.json": `{}`,
+    "/p/.npmrc": `registry=https://registry.npmjs.org/\n`,
+  };
+  const project = npmProject("/p");
+  const findings = auditSettings(project, loadPolicy({}), { readFile: (p) => files[p] ?? null });
+  const result = applySettings(project, findings, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+    gitStatus: () => "dirty",
+    force: true,
+    commit: false,
+  });
+  expect(result.skipped).toBeNull();
+  expect(files["/p/.npmrc"]).toContain("ignore-scripts=true");
+});
+
+test("apply does not write lockfile.missing or pm.unpinned", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+  };
+  const project = npmProject("/p");
+  const findings = auditSettings(project, loadPolicy({}), { readFile: (p) => files[p] ?? null });
+  expect(findings.some((f) => f.code === "lockfile.missing")).toBe(true);
+  expect(findings.some((f) => f.code === "pm.unpinned")).toBe(true);
+  const result = applySettings(project, findings, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+    gitStatus: () => "clean",
+    force: false,
+    commit: false,
+  });
+  expect(files["/p/package-lock.json"]).toBeUndefined();
+  expect(files["/p/package.json"]).toBe(`{"name":"x"}`);
+  expect(result.written).not.toContain("/p/package-lock.json");
+  expect(result.written).not.toContain("/p/package.json");
+});
+
+test("apply creates missing pnpm-workspace.yaml, .yarnrc.yml, bunfig.toml, and uv.toml", () => {
+  const cases: {
+    files: Record<string, string>;
+    project: Project;
+    created: string;
+    contains: string;
+  }[] = [
+    {
+      files: {
+        "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
+        "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+      },
+      project: {
+        root: "/p",
+        gitRoot: "/p",
+        managers: [
+          {
+            name: "pnpm" as const,
+            role: "primary" as const,
+            manifestPath: "/p/package.json",
+            lockfilePath: "/p/pnpm-lock.yaml",
+            configPath: "/p/pnpm-workspace.yaml",
+          },
+        ],
+      },
+      created: "/p/pnpm-workspace.yaml",
+      contains: "minimumReleaseAge: 10080",
+    },
+    {
+      files: {
+        "/p/package.json": `{"name":"x","packageManager":"yarn@4.5.0"}`,
+        "/p/yarn.lock": "# yarn\n",
+      },
+      project: {
+        root: "/p",
+        gitRoot: "/p",
+        managers: [
+          {
+            name: "yarn" as const,
+            role: "primary" as const,
+            manifestPath: "/p/package.json",
+            lockfilePath: "/p/yarn.lock",
+            configPath: "/p/.yarnrc.yml",
+          },
+        ],
+      },
+      created: "/p/.yarnrc.yml",
+      contains: "enableScripts: false",
+    },
+    {
+      files: {
+        "/p/package.json": `{"name":"x"}`,
+        "/p/bun.lock": "",
+      },
+      project: {
+        root: "/p",
+        gitRoot: "/p",
+        managers: [
+          {
+            name: "bun" as const,
+            role: "primary" as const,
+            manifestPath: "/p/package.json",
+            lockfilePath: "/p/bun.lock",
+            configPath: "/p/bunfig.toml",
+          },
+        ],
+      },
+      created: "/p/bunfig.toml",
+      contains: "ignoreScripts = true",
+    },
+    {
+      files: {
+        "/p/pyproject.toml": `[project]\nname = "x"\n`,
+        "/p/uv.lock": "",
+      },
+      project: {
+        root: "/p",
+        gitRoot: "/p",
+        managers: [
+          {
+            name: "uv" as const,
+            role: "primary" as const,
+            manifestPath: "/p/pyproject.toml",
+            lockfilePath: "/p/uv.lock",
+            configPath: null,
+          },
+        ],
+      },
+      created: "/p/uv.toml",
+      contains: "exclude-newer",
+    },
+  ];
+
+  for (const row of cases) {
+    const files: Record<string, string> = { ...row.files };
+    expect(files[row.created]).toBeUndefined();
+    const findings = auditSettings(row.project, loadPolicy({}), {
+      readFile: (p) => files[p] ?? null,
+    });
+    const result = applySettings(row.project, findings, loadPolicy({}), {
+      readFile: (p) => files[p] ?? null,
+      writeFile: (p, b) => {
+        files[p] = b;
+      },
+      gitStatus: () => "clean",
+      force: false,
+      commit: false,
+    });
+    expect(result.skipped).toBeNull();
+    expect(result.written).toContain(row.created);
+    expect(files[row.created]).toContain(row.contains);
+  }
+});
+
+test("auditPath without --apply never writes", async () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/package-lock.json": `{}`,
+    "/p/.npmrc": `registry=https://registry.npmjs.org/\n`,
+  };
+  const result = await auditPath("/p", {
+    policy: loadPolicy({}),
+    apply: false,
+    applyAdvisories: false,
+    interactive: false,
+    concurrency: 4,
+    force: false,
+    commit: false,
+    deps: {
+      readFile: (p) => files[p] ?? null,
+      readDir: (dir) => {
+        if (dir === "/p") return ["package.json", "package-lock.json", ".npmrc", ".git"];
+        return [];
+      },
+      isDir: (p) => p === "/p" || p === "/p/.git",
+      which: () => "/usr/bin/npm",
+      run: async () => ({ code: 0, stdout: `{"advisories":{}}`, stderr: "" }),
+      writeFile: () => {
+        throw new Error("audit must not write");
+      },
+      gitStatus: () => "clean",
+    },
+  });
+  expect(files["/p/.npmrc"]).toBe(`registry=https://registry.npmjs.org/\n`);
+  expect(result.exitCode).toBe(1);
 });
 
 test("committed is false when git commit fails", () => {

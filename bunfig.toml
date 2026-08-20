@@ -4,3 +4,4 @@ root = "."
 [install]
 ignoreScripts = true
 registry = "https://registry.npmjs.org/"
+minimumReleaseAge = 604800

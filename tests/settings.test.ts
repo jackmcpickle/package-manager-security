@@ -247,7 +247,7 @@ test("bun primary fully configured is quiet under standard", () => {
     "/p/package.json": `{"name":"x"}`,
     "/p/bun.lock": `{"lockfileVersion":1}`,
     "/p/bunfig.toml":
-      `trustedDependencies = ["foo"]\n\n[install]\nregistry = "https://registry.npmjs.org/"\n`,
+      `trustedDependencies = ["foo"]\n\n[install]\nregistry = "https://registry.npmjs.org/"\nminimumReleaseAge = 604800\n`,
   };
   const findings = auditSettings(bunProject("/p"), loadPolicy({}), {
     readFile: (p) => files[p] ?? null,
@@ -549,6 +549,100 @@ test("enabledManagers omitting pnpm skips pnpm settings findings but still repor
   });
   expect(findings.some((f) => f.code === "lockfile.leftover")).toBe(true);
   expect(findings.some((f) => f.manager === "pnpm")).toBe(false);
+});
+
+test("pip and pipenv primaries emit python.not-uv and are not fixable", () => {
+  for (const name of ["pip", "pipenv"] as const) {
+    const project: Project = {
+      root: "/py",
+      gitRoot: "/py",
+      managers: [
+        {
+          name,
+          role: "primary",
+          manifestPath: name === "pip" ? "/py/requirements.txt" : "/py/Pipfile",
+          lockfilePath: name === "pip" ? null : "/py/Pipfile.lock",
+          configPath: null,
+        },
+      ],
+    };
+    const findings = auditSettings(project, loadPolicy({}), { readFile: () => null });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        code: "python.not-uv",
+        kind: "not-using-uv",
+        severity: "high",
+        fixable: false,
+        manager: name,
+      }),
+    ]);
+  }
+});
+
+function yarnProject(root: string): Project {
+  return {
+    root,
+    gitRoot: root,
+    managers: [
+      {
+        name: "yarn",
+        role: "primary",
+        manifestPath: `${root}/package.json`,
+        lockfilePath: `${root}/yarn.lock`,
+        configPath: `${root}/.yarnrc.yml`,
+      },
+    ],
+  };
+}
+
+test("yarn berry missing yarn.lock emits lockfile.missing", () => {
+  const files: Record<string, string> = {
+    "/y/package.json": `{"name":"y","packageManager":"yarn@4.5.0"}`,
+    "/y/.yarnrc.yml": `enableScripts: false\nnpmRegistryServer: "https://registry.npmjs.org/"\n`,
+  };
+  const project = yarnProject("/y");
+  project.managers[0]!.lockfilePath = "/y/yarn.lock";
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "lockfile.missing")).toBe(true);
+});
+
+test("yarn berry with npmAudit false emits audit.disabled", () => {
+  const files: Record<string, string> = {
+    "/y/package.json": `{"name":"y","packageManager":"yarn@4.5.0"}`,
+    "/y/yarn.lock": "# yarn\n",
+    "/y/.yarnrc.yml":
+      `enableScripts: false\nnpmRegistryServer: "https://registry.npmjs.org/"\nnpmAudit: false\n`,
+  };
+  const findings = auditSettings(yarnProject("/y"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "audit.disabled")).toBe(true);
+});
+
+test("yarn berry without npmRegistryServer emits registry.unpinned", () => {
+  const files: Record<string, string> = {
+    "/y/package.json": `{"name":"y","packageManager":"yarn@4.5.0"}`,
+    "/y/yarn.lock": "# yarn\n",
+    "/y/.yarnrc.yml": `enableScripts: false\n`,
+  };
+  const findings = auditSettings(yarnProject("/y"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "registry.unpinned")).toBe(true);
+});
+
+test("bun without install.registry emits registry.unpinned", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/bun.lock": `{"lockfileVersion":1}`,
+    "/p/bunfig.toml": `trustedDependencies = ["foo"]\n`,
+  };
+  const findings = auditSettings(bunProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "registry.unpinned")).toBe(true);
 });
 
 test("malformed yarn packageManager pin is unpinned", () => {

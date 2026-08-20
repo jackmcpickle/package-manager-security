@@ -162,8 +162,8 @@ function renderConfig(
 ): string | null {
   if (manager === "npm") return mergeNpmrc(raw, codes, settings);
   if (manager === "pnpm") return mergePnpmYaml(raw, codes, settings);
-  if (manager === "yarn") return mergeYarnYaml(raw, codes);
-  if (manager === "bun") return mergeBunfig(raw, codes);
+  if (manager === "yarn") return mergeYarnYaml(raw, codes, settings);
+  if (manager === "bun") return mergeBunfig(raw, codes, settings);
   return mergeUv(raw, codes, settings);
 }
 
@@ -175,6 +175,10 @@ function mergeNpmrc(raw: string, codes: Set<string>, settings: ResolvedSettings)
     updates["audit-level"] = settings.auditLevel;
   }
   if (codes.has("min-age.disabled")) updates["min-release-age"] = String(settings.minReleaseAgeDays);
+  if (codes.has("source.non-registry")) {
+    updates["allow-git"] = "none";
+    updates["allow-remote"] = "none";
+  }
   if (codes.has("registry.unpinned")) updates.registry = DEFAULT_REGISTRY;
 
   const seen = new Set<string>();
@@ -202,25 +206,30 @@ function mergePnpmYaml(raw: string, codes: Set<string>, settings: ResolvedSettin
   const parsed = parseYaml(raw);
   if (!parsed.ok) return null;
   const yaml = parsed.value;
-  if (codes.has("scripts.unrestricted")) {
+  if (codes.has("scripts.unrestricted") || codes.has("scripts.legacy-config")) {
     yaml.dangerouslyAllowAllBuilds = false;
-    if (yaml.onlyBuiltDependencies === undefined && yaml.neverBuiltDependencies === undefined) {
-      yaml.onlyBuiltDependencies = [];
-    }
+    yaml.allowBuilds = migrateAllowBuilds(yaml);
   }
+  if (codes.has("scripts.non-strict")) yaml.strictDepBuilds = true;
+  if (codes.has("source.non-registry")) yaml.blockExoticSubdeps = true;
   if (codes.has("audit.disabled")) {
     yaml.audit = true;
     yaml.auditLevel = settings.auditLevel;
   }
   // pnpm reads bare minimumReleaseAge numbers as minutes.
   if (codes.has("min-age.disabled")) yaml.minimumReleaseAge = settings.minReleaseAgeDays * 24 * 60;
+  if (codes.has("min-age.non-strict")) yaml.minimumReleaseAgeStrict = true;
+  if (codes.has("min-age.missing-time")) yaml.minimumReleaseAgeIgnoreMissingTime = false;
+  if (codes.has("min-age.exclude-all")) {
+    yaml.minimumReleaseAgeExclude = dropBlanketEntries(yaml.minimumReleaseAgeExclude);
+  }
   if (codes.has("registry.unpinned") && !hasText(yaml.registry) && !hasDefaultRegistry(yaml)) {
     yaml.registry = DEFAULT_REGISTRY;
   }
   return stringifyYaml(yaml);
 }
 
-function mergeYarnYaml(raw: string, codes: Set<string>): string | null {
+function mergeYarnYaml(raw: string, codes: Set<string>, settings: ResolvedSettings): string | null {
   const parsed = parseYaml(raw);
   if (!parsed.ok) return null;
   const yaml = parsed.value;
@@ -230,18 +239,35 @@ function mergeYarnYaml(raw: string, codes: Set<string>): string | null {
     delete yaml.npmAudit;
     yaml.enableNpmAudit = true;
   }
+  // yarn reads bare npmMinimalAgeGate numbers as minutes.
+  if (codes.has("min-age.disabled")) {
+    yaml.npmMinimalAgeGate = settings.minReleaseAgeDays * 24 * 60;
+  }
+  if (codes.has("min-age.exclude-all")) {
+    yaml.npmPreapprovedPackages = dropBlanketEntries(yaml.npmPreapprovedPackages);
+  }
+  if (codes.has("integrity.checksum-relaxed")) yaml.checksumBehavior = "throw";
+  if (codes.has("integrity.strict-ssl")) yaml.enableStrictSsl = true;
+  if (codes.has("integrity.hardened-mode")) yaml.enableHardenedMode = true;
   if (codes.has("registry.unpinned") && !hasText(yaml.npmRegistryServer)) {
     yaml.npmRegistryServer = DEFAULT_REGISTRY;
   }
   return stringifyYaml(yaml);
 }
 
-function mergeBunfig(raw: string, codes: Set<string>): string | null {
+function mergeBunfig(raw: string, codes: Set<string>, settings: ResolvedSettings): string | null {
   const parsed = parseTomlObject(raw);
   if (!parsed.ok) return null;
   const table = parsed.value;
   const install = isPlainObject(table.install) ? table.install : {};
   if (codes.has("scripts.unrestricted")) install.ignoreScripts = true;
+  // bun reads minimumReleaseAge as seconds.
+  if (codes.has("min-age.disabled")) {
+    install.minimumReleaseAge = settings.minReleaseAgeDays * 86_400;
+  }
+  if (codes.has("min-age.exclude-all")) {
+    install.minimumReleaseAgeExcludes = dropBlanketEntries(install.minimumReleaseAgeExcludes);
+  }
   if (codes.has("registry.unpinned") && !bunRegistryPinned(install)) {
     install.registry = DEFAULT_REGISTRY;
   }
@@ -259,8 +285,49 @@ function mergeUv(raw: string, codes: Set<string>, settings: ResolvedSettings): s
       Date.now() - settings.minReleaseAgeDays * 86_400_000,
     ).toISOString();
   }
+  if (codes.has("min-age.exclude-all") && isPlainObject(target["exclude-newer-package"])) {
+    const kept = Object.entries(target["exclude-newer-package"]).filter(
+      ([key]) => !isBlanket(key),
+    );
+    target["exclude-newer-package"] = Object.fromEntries(kept);
+  }
   if (codes.has("registry.unpinned")) target["index-strategy"] = "first-index";
   return `${stringifyToml(table).trimEnd()}\n`;
+}
+
+function isBlanket(entry: unknown): boolean {
+  return typeof entry === "string" && /^\*+$/.test(entry.trim());
+}
+
+/** Strips bare wildcards, which would otherwise void the release-age gate. */
+function dropBlanketEntries(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string" && !isBlanket(entry));
+}
+
+/**
+ * Folds pnpm's removed onlyBuiltDependencies family into the allowBuilds map
+ * that replaced it in pnpm 11, deleting the legacy keys as it goes.
+ */
+function migrateAllowBuilds(yaml: Record<string, unknown>): Record<string, unknown> {
+  const allowBuilds = isPlainObject(yaml.allowBuilds) ? yaml.allowBuilds : {};
+  const merge = (key: string, allowed: boolean) => {
+    const list = yaml[key];
+    if (Array.isArray(list)) {
+      for (const name of list) {
+        if (typeof name === "string" && allowBuilds[name] === undefined) {
+          allowBuilds[name] = allowed;
+        }
+      }
+    }
+    delete yaml[key];
+  };
+  merge("onlyBuiltDependencies", true);
+  merge("neverBuiltDependencies", false);
+  merge("ignoredBuiltDependencies", false);
+  delete yaml.onlyBuiltDependenciesFile;
+  delete yaml.ignoreDepScripts;
+  return allowBuilds;
 }
 
 function uvWriteTable(table: Record<string, unknown>): Record<string, unknown> {
@@ -300,7 +367,9 @@ function parseYaml(raw: string): ParsedTable {
 function stringifyYaml(obj: Record<string, unknown>): string {
   const lines: string[] = [];
   for (const [key, value] of Object.entries(obj)) {
-    if (Array.isArray(value)) {
+    if (isPlainObject(value) && Object.keys(value).length === 0) {
+      lines.push(`${key}: {}`);
+    } else if (Array.isArray(value)) {
       if (value.length === 0) {
         lines.push(`${key}: []`);
       } else {

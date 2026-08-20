@@ -118,13 +118,56 @@ function auditNpm(
   const settings = resolveSettings(policy, "npm");
   const npmrcPath = manager.configPath ?? `${project.root}/.npmrc`;
   const npmrc = parseNpmrc(readFile(npmrcPath) ?? "");
+  const manifestRaw = readFile(manager.manifestPath);
   const findings: Finding[] = [];
 
-  if (settings.ignoreScripts && npmrc["ignore-scripts"] !== "true") {
+  const scriptsIgnored = npmrc["ignore-scripts"] === "true";
+  const allowScripts = isPlainObject(manifestField(manifestRaw, "allowScripts"));
+  const strictAllowScripts = npmrc["strict-allow-scripts"] === "true";
+
+  // An enforced package.json allowScripts policy is a valid, more precise
+  // alternative to blanket ignore-scripts. It is only enforced once
+  // strict-allow-scripts is on; until then npm 11 merely warns.
+  if (settings.ignoreScripts && !scriptsIgnored && !(allowScripts && strictAllowScripts)) {
     findings.push(
       setting(
         "scripts.unrestricted",
-        "npm ignore-scripts must be true",
+        "npm ignore-scripts must be true, or allowScripts with strict-allow-scripts",
+        "high",
+        npmrcPath,
+        "npm",
+      ),
+    );
+  }
+
+  if (settings.ignoreScripts && allowScripts && !strictAllowScripts) {
+    findings.push(
+      advice(
+        "scripts.allowlist-advisory",
+        "allowScripts is advisory until strict-allow-scripts=true (npm 12 default)",
+        npmrcPath,
+        "npm",
+      ),
+    );
+  }
+
+  // npm/cli#9450: ignore-scripts hides the allowScripts tooling entirely.
+  if (scriptsIgnored && allowScripts) {
+    findings.push(
+      advice(
+        "scripts.allowlist-masked",
+        "ignore-scripts=true masks the package.json allowScripts policy",
+        npmrcPath,
+        "npm",
+      ),
+    );
+  }
+
+  if (settings.ignoreScripts && npmrcAllowsNonRegistry(npmrc)) {
+    findings.push(
+      setting(
+        "source.non-registry",
+        "allow-git and allow-remote must not be set to all",
         "high",
         npmrcPath,
         "npm",
@@ -207,24 +250,81 @@ function auditPnpm(
   const settings = resolveSettings(policy, "pnpm");
   const yamlPath = manager.configPath ?? `${project.root}/pnpm-workspace.yaml`;
   const yaml = parseYaml(readFile(yamlPath) ?? "");
+  const version = managerVersion(readFile(manager.manifestPath), "pnpm");
+  // pnpm >= 10 blocks dependency builds by default; pnpm >= 11 replaced the
+  // onlyBuiltDependencies family with a single allowBuilds map.
+  const buildsBlockedByDefault = atLeastOrUnknown(version, 10);
+  const usesAllowBuilds = atLeastOrUnknown(version, 11);
   const findings: Finding[] = [];
 
   if (settings.ignoreScripts) {
-    const allowAll = yaml["dangerouslyAllowAllBuilds"] === true;
-    const hasAllowlist =
-      yaml["onlyBuiltDependencies"] !== undefined ||
-      yaml["neverBuiltDependencies"] !== undefined;
-    if (allowAll || !hasAllowlist) {
+    const hasAllowBuilds = isPlainObject(yaml["allowBuilds"]);
+    const legacy = PNPM_LEGACY_BUILD_KEYS.filter((key) => yaml[key] !== undefined);
+
+    if (yaml["dangerouslyAllowAllBuilds"] === true) {
       findings.push(
         setting(
           "scripts.unrestricted",
-          "pnpm builds must be restricted",
+          "pnpm dangerouslyAllowAllBuilds must not be true",
+          "high",
+          yamlPath,
+          "pnpm",
+        ),
+      );
+    } else if (usesAllowBuilds && legacy.length > 0 && !hasAllowBuilds) {
+      findings.push(
+        setting(
+          "scripts.legacy-config",
+          `pnpm 11 removed ${legacy.join(", ")}; use allowBuilds instead`,
+          "high",
+          yamlPath,
+          "pnpm",
+        ),
+      );
+    } else if (!hasAllowBuilds && legacy.length === 0) {
+      findings.push(
+        buildsBlockedByDefault
+          ? advice(
+              "scripts.unrestricted",
+              "pnpm blocks dependency builds by default; declare allowBuilds to review them explicitly",
+              yamlPath,
+              "pnpm",
+              defaultRelianceSeverity(policy.preset),
+              true,
+            )
+          : setting(
+              "scripts.unrestricted",
+              "pnpm builds must be restricted",
+              "high",
+              yamlPath,
+              "pnpm",
+            ),
+      );
+    }
+
+    if (yaml["strictDepBuilds"] === false) {
+      findings.push(
+        setting(
+          "scripts.non-strict",
+          "pnpm strictDepBuilds must not be false",
           "high",
           yamlPath,
           "pnpm",
         ),
       );
     }
+  }
+
+  if (yaml["blockExoticSubdeps"] === false) {
+    findings.push(
+      setting(
+        "source.non-registry",
+        "pnpm blockExoticSubdeps must not be false",
+        "high",
+        yamlPath,
+        "pnpm",
+      ),
+    );
   }
 
   const lockfileOff = yaml["lockfile"] === false;
@@ -256,7 +356,11 @@ function auditPnpm(
   }
 
   if (settings.minReleaseAgeDays > 0) {
-    const hours = parsePnpmAgeHours(yaml["minimumReleaseAge"]);
+    const raw = yaml["minimumReleaseAge"];
+    const explicit = raw !== undefined;
+    // pnpm 11 ships minimumReleaseAge=1440 (24h) on by default.
+    const defaultHours = usesAllowBuilds ? 24 : 0;
+    const hours = explicit ? parsePnpmAgeHours(raw) : defaultHours;
     const requiredHours = settings.minReleaseAgeDays * 24;
     if (hours === null || hours < requiredHours) {
       findings.push(
@@ -264,6 +368,44 @@ function auditPnpm(
           "min-age.disabled",
           `minimumReleaseAge must be at least ${requiredHours * 60} minutes`,
           "high",
+          yamlPath,
+          "pnpm",
+        ),
+      );
+    }
+
+    // minimumReleaseAgeStrict defaults to true only when the gate is set
+    // explicitly; false lets pnpm fall back to a version that fails the gate.
+    if (yaml["minimumReleaseAgeStrict"] === false) {
+      findings.push(
+        setting(
+          "min-age.non-strict",
+          "pnpm minimumReleaseAgeStrict must not be false",
+          "high",
+          yamlPath,
+          "pnpm",
+        ),
+      );
+    }
+
+    if (isBlanketExclude(yaml["minimumReleaseAgeExclude"])) {
+      findings.push(
+        setting(
+          "min-age.exclude-all",
+          "minimumReleaseAgeExclude must not exempt every package",
+          "high",
+          yamlPath,
+          "pnpm",
+        ),
+      );
+    }
+
+    if (policy.preset === "strict" && yaml["minimumReleaseAgeIgnoreMissingTime"] !== false) {
+      findings.push(
+        setting(
+          "min-age.missing-time",
+          "minimumReleaseAgeIgnoreMissingTime must be false to fail closed",
+          "moderate",
           yamlPath,
           "pnpm",
         ),
@@ -307,14 +449,94 @@ function auditYarn(
   const settings = resolveSettings(policy, "yarn");
   const yarnrcPath = manager.configPath ?? `${project.root}/.yarnrc.yml`;
   const yarnrc = parseYaml(readFile(yarnrcPath) ?? "");
+  const version = managerVersion(readFile(manager.manifestPath), "yarn");
+  // Yarn stopped running dependency postinstalls by default in 4.14, and
+  // added npmMinimalAgeGate (default 1w) in 4.12.
+  const scriptsOffByDefault = atLeastOrUnknown(version, 4, 14);
+  const ageGateByDefault = atLeastOrUnknown(version, 4, 12);
   const findings: Finding[] = [];
 
   if (settings.ignoreScripts && yarnrc["enableScripts"] !== false) {
     findings.push(
+      yarnrc["enableScripts"] === true || !scriptsOffByDefault
+        ? setting(
+            "scripts.unrestricted",
+            "yarn enableScripts must be false",
+            "high",
+            yarnrcPath,
+            "yarn",
+          )
+        : advice(
+            "scripts.unrestricted",
+            "yarn defaults enableScripts to false; set it explicitly to keep that guarantee",
+            yarnrcPath,
+            "yarn",
+            defaultRelianceSeverity(policy.preset),
+            true,
+          ),
+    );
+  }
+
+  if (settings.minReleaseAgeDays > 0) {
+    const raw = yarnrc["npmMinimalAgeGate"];
+    const defaultHours = ageGateByDefault ? 24 * 7 : 0;
+    const hours = raw === undefined ? defaultHours : parsePnpmAgeHours(raw);
+    const requiredHours = settings.minReleaseAgeDays * 24;
+    if (hours === null || hours < requiredHours) {
+      findings.push(
+        setting(
+          "min-age.disabled",
+          `npmMinimalAgeGate must be at least ${requiredHours * 60} minutes`,
+          "high",
+          yarnrcPath,
+          "yarn",
+        ),
+      );
+    }
+
+    if (isBlanketExclude(yarnrc["npmPreapprovedPackages"])) {
+      findings.push(
+        setting(
+          "min-age.exclude-all",
+          "npmPreapprovedPackages must not exempt every package",
+          "high",
+          yarnrcPath,
+          "yarn",
+        ),
+      );
+    }
+  }
+
+  if (yarnrc["checksumBehavior"] !== undefined && yarnrc["checksumBehavior"] !== "throw") {
+    findings.push(
       setting(
-        "scripts.unrestricted",
-        "yarn enableScripts must be false",
+        "integrity.checksum-relaxed",
+        'yarn checksumBehavior must be "throw"',
         "high",
+        yarnrcPath,
+        "yarn",
+      ),
+    );
+  }
+
+  if (yarnrc["enableStrictSsl"] === false) {
+    findings.push(
+      setting(
+        "integrity.strict-ssl",
+        "yarn enableStrictSsl must not be false",
+        "high",
+        yarnrcPath,
+        "yarn",
+      ),
+    );
+  }
+
+  if (yarnrc["enableHardenedMode"] === false) {
+    findings.push(
+      setting(
+        "integrity.hardened-mode",
+        "yarn enableHardenedMode must not be false",
+        "moderate",
         yarnrcPath,
         "yarn",
       ),
@@ -408,6 +630,35 @@ function auditBun(
     );
   }
 
+  if (settings.minReleaseAgeDays > 0) {
+    // bun expresses minimumReleaseAge in SECONDS and ships it off by default.
+    const seconds = parseNumber(install["minimumReleaseAge"]);
+    const requiredSeconds = settings.minReleaseAgeDays * 86_400;
+    if (seconds === null || seconds < requiredSeconds) {
+      findings.push(
+        setting(
+          "min-age.disabled",
+          `install.minimumReleaseAge must be at least ${requiredSeconds} seconds`,
+          "high",
+          bunfigPath,
+          "bun",
+        ),
+      );
+    }
+
+    if (isBlanketExclude(install["minimumReleaseAgeExcludes"])) {
+      findings.push(
+        setting(
+          "min-age.exclude-all",
+          "minimumReleaseAgeExcludes must not exempt every package",
+          "high",
+          bunfigPath,
+          "bun",
+        ),
+      );
+    }
+  }
+
   if (!bunRegistryPinned(install)) {
     findings.push(
       setting(
@@ -446,16 +697,30 @@ function auditUv(
     );
   }
 
-  if (settings.minReleaseAgeDays > 0 && !uvExcludeNewerMeets(cfg["exclude-newer"], settings.minReleaseAgeDays)) {
-    findings.push(
-      setting(
-        "min-age.disabled",
-        `exclude-newer must meet ${settings.minReleaseAgeDays} days`,
-        "high",
-        configPath,
-        "uv",
-      ),
-    );
+  if (settings.minReleaseAgeDays > 0) {
+    if (!uvExcludeNewerMeets(cfg["exclude-newer"], settings.minReleaseAgeDays)) {
+      findings.push(
+        setting(
+          "min-age.disabled",
+          `exclude-newer must meet ${settings.minReleaseAgeDays} days`,
+          "high",
+          configPath,
+          "uv",
+        ),
+      );
+    }
+
+    if (isBlanketExclude(cfg["exclude-newer-package"])) {
+      findings.push(
+        setting(
+          "min-age.exclude-all",
+          "exclude-newer-package must not exempt every package",
+          "high",
+          configPath,
+          "uv",
+        ),
+      );
+    }
   }
 
   if (policy.preset === "strict" && uvHasExtraIndexes(cfg) && cfg["index-strategy"] !== "first-index") {
@@ -489,6 +754,84 @@ function setting(
     fixable: true,
     manager,
   };
+}
+
+/**
+ * A finding that flags a weaker-than-ideal but not broken configuration —
+ * typically relying on a safe default instead of pinning it explicitly.
+ * Those are safe to write automatically; notes needing human judgement are not.
+ */
+function advice(
+  code: string,
+  message: string,
+  path: string,
+  manager: PackageManager,
+  severity: Severity = "info",
+  fixable = false,
+): Finding {
+  return { kind: "settings", code, message, severity, path, fixable, manager };
+}
+
+const PNPM_LEGACY_BUILD_KEYS = [
+  "onlyBuiltDependencies",
+  "onlyBuiltDependenciesFile",
+  "neverBuiltDependencies",
+  "ignoredBuiltDependencies",
+  "ignoreDepScripts",
+] as const;
+
+type ManagerVersion = { major: number; minor: number };
+
+/** Reads the pinned version out of package.json `packageManager`. */
+function managerVersion(raw: string | null, name: string): ManagerVersion | null {
+  const field = manifestField(raw, "packageManager");
+  if (typeof field !== "string") return null;
+  const match = field.match(/^([a-z]+)@(\d+)\.(\d+)/);
+  if (match === null || match[1] !== name) return null;
+  return { major: Number(match[2]), minor: Number(match[3]) };
+}
+
+/**
+ * True when the pinned version is at least `major.minor`, or when no version is
+ * pinned at all — an unpinned repo is assumed to be on a current release, and
+ * `pm.unpinned` already nags about the missing pin.
+ */
+function atLeastOrUnknown(
+  version: ManagerVersion | null,
+  major: number,
+  minor = 0,
+): boolean {
+  if (version === null) return true;
+  if (version.major !== major) return version.major > major;
+  return version.minor >= minor;
+}
+
+function defaultRelianceSeverity(preset: PresetName): Severity {
+  return preset === "strict" ? "moderate" : "info";
+}
+
+/** True when an exclude list uses a bare wildcard, which voids the gate. */
+function isBlanketExclude(value: unknown): boolean {
+  const isStar = (entry: unknown) => typeof entry === "string" && /^\*+$/.test(entry.trim());
+  if (isStar(value)) return true;
+  if (Array.isArray(value)) return value.some(isStar);
+  if (isPlainObject(value)) return Object.keys(value).some(isStar);
+  return false;
+}
+
+function manifestField(raw: string | null, key: string): unknown {
+  if (raw === null) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isPlainObject(parsed) ? parsed[key] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** npm 12 defaults allow-git and allow-remote to "none". */
+function npmrcAllowsNonRegistry(npmrc: Record<string, string>): boolean {
+  return npmrc["allow-git"] === "all" || npmrc["allow-remote"] === "all";
 }
 
 function resolveSettings(policy: Policy, name: PackageManager): ResolvedSettings {
