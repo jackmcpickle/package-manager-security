@@ -1,0 +1,160 @@
+import { expect, test } from "bun:test";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { discoverProjects } from "../src/discover";
+
+const FIX = join(import.meta.dir, "fixtures/discover");
+
+for (const rel of [
+  "many-repos/alpha",
+  "many-repos/beta",
+  "monorepo",
+  "nested-npmrc",
+]) {
+  mkdirSync(join(FIX, rel, ".git"), { recursive: true });
+}
+
+test("a folder of git repos yields one project per repo", () => {
+  const projects = discoverProjects(join(FIX, "many-repos"));
+  const roots = projects.map((p) => p.root.split("/").at(-1)).sort();
+  expect(roots).toEqual(["alpha", "beta"]);
+});
+
+test("leftover package-lock beside pnpm is leftover npm not a second apply target", () => {
+  const beta = discoverProjects(join(FIX, "many-repos")).find((p) => p.root.endsWith("beta"));
+  expect(beta?.managers.some((m) => m.name === "pnpm" && m.role === "primary")).toBe(true);
+  expect(beta?.managers.some((m) => m.name === "npm" && m.role === "leftover")).toBe(true);
+});
+
+test("monorepo workspace packages without their own config are not separate projects", () => {
+  const projects = discoverProjects(join(FIX, "monorepo"));
+  expect(projects).toHaveLength(1);
+  expect(projects[0]?.managers.some((m) => m.name === "pnpm" && m.role === "primary")).toBe(true);
+});
+
+test("nested package with its own .npmrc is a separate PM root", () => {
+  const projects = discoverProjects(join(FIX, "nested-npmrc"));
+  expect(projects).toHaveLength(2);
+  const names = projects.map((p) => p.root.split("/").at(-1)).sort();
+  expect(names).toEqual(["app", "nested-npmrc"]);
+  const app = projects.find((p) => p.root.endsWith("app"));
+  expect(app?.gitRoot?.endsWith("nested-npmrc")).toBe(true);
+  expect(app?.managers.some((m) => m.name === "npm" && m.role === "primary")).toBe(true);
+});
+
+test("yarn berry is primary and yarn classic is unsupported", () => {
+  const berry = discoverProjects(
+    "/berry",
+    memoryFs(
+      {
+        "/berry/package.json": `{"name":"berry","packageManager":"yarn@4.5.0"}`,
+        "/berry/yarn.lock": "# yarn\n",
+        "/berry/.yarnrc.yml": "nodeLinker: node-modules\n",
+      },
+      ["/berry/.git"],
+    ),
+  );
+  expect(berry).toHaveLength(1);
+  expect(berry[0]?.managers).toEqual([
+    {
+      name: "yarn",
+      role: "primary",
+      manifestPath: "/berry/package.json",
+      lockfilePath: "/berry/yarn.lock",
+      configPath: "/berry/.yarnrc.yml",
+    },
+  ]);
+
+  const classic = discoverProjects(
+    "/classic",
+    memoryFs(
+      {
+        "/classic/package.json": `{"name":"classic"}`,
+        "/classic/yarn.lock": "# yarn lockfile v1\n",
+      },
+      ["/classic/.git"],
+    ),
+  );
+  expect(classic[0]?.managers.some((m) => m.name === "yarn" && m.role === "unsupported")).toBe(
+    true,
+  );
+});
+
+test("bun and uv markers are primary managers", () => {
+  const bun = discoverProjects(
+    "/bun",
+    memoryFs({
+      "/bun/package.json": `{"name":"bun-app"}`,
+      "/bun/bun.lock": "x\n",
+      "/bun/bunfig.toml": "[install]\n",
+    }),
+  );
+  expect(bun[0]?.gitRoot).toBeNull();
+  expect(bun[0]?.managers.some((m) => m.name === "bun" && m.role === "primary")).toBe(true);
+
+  const uv = discoverProjects(
+    "/uv",
+    memoryFs({
+      "/uv/pyproject.toml": "[project]\nname = \"uv-app\"\n[tool.uv]\n",
+      "/uv/uv.lock": "x\n",
+    }),
+  );
+  expect(uv[0]?.managers.some((m) => m.name === "uv" && m.role === "primary")).toBe(true);
+});
+
+test("skip directories are not walked for repos or PM roots", () => {
+  const projects = discoverProjects(
+    "/root",
+    memoryFs(
+      {
+        "/root/package.json": `{"name":"root"}`,
+        "/root/package-lock.json": `{"lockfileVersion":3}`,
+        "/root/node_modules/evil/package.json": `{"name":"evil"}`,
+        "/root/node_modules/evil/.npmrc": "registry=https://example.com/\n",
+        "/root/dist/app/package.json": `{"name":"dist-app"}`,
+        "/root/dist/app/.npmrc": "registry=https://example.com/\n",
+      },
+      ["/root/.git", "/root/node_modules/evil/.git"],
+    ),
+  );
+  expect(projects.map((p) => p.root)).toEqual(["/root"]);
+});
+
+function memoryFs(
+  files: Record<string, string>,
+  extraDirs: string[] = [],
+): {
+  readDir: (dir: string) => string[];
+  readFile: (path: string) => string | null;
+  isDir: (path: string) => boolean;
+} {
+  const dirs = new Set<string>(["/", ...extraDirs]);
+  const addDir = (dir: string) => {
+    let current = dir;
+    while (current && current !== "/") {
+      dirs.add(current);
+      current = dirname(current);
+    }
+  };
+  for (const file of Object.keys(files)) addDir(dirname(file));
+  for (const dir of extraDirs) addDir(dir);
+
+  return {
+    readDir(dir: string): string[] {
+      const prefix = dir.endsWith("/") ? dir : `${dir}/`;
+      const names = new Set<string>();
+      for (const path of [...dirs, ...Object.keys(files)]) {
+        if (!path.startsWith(prefix)) continue;
+        const name = path.slice(prefix.length).split("/")[0];
+        if (name) names.add(name);
+      }
+      return [...names];
+    },
+    readFile(path: string): string | null {
+      return files[path] ?? null;
+    },
+    isDir(path: string): boolean {
+      return dirs.has(path);
+    },
+  };
+}
