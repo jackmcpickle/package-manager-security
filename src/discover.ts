@@ -181,7 +181,7 @@ function hasToolTable(dir: string, fs: Fs, name: string): boolean {
   const pyproject = readPyproject(dir, fs);
   if (pyproject === null) return false;
   const tool = pyproject["tool"];
-  return isPlainObject(tool) && name in tool;
+  return isPlainObject(tool) && isPlainObject(tool[name]);
 }
 
 function hasToolUv(dir: string, fs: Fs): boolean {
@@ -194,7 +194,7 @@ function hasToolPoetry(dir: string, fs: Fs): boolean {
 
 function hasProjectTable(dir: string, fs: Fs): boolean {
   const pyproject = readPyproject(dir, fs);
-  return pyproject !== null && "project" in pyproject;
+  return pyproject !== null && isPlainObject(pyproject["project"]);
 }
 
 function hasRequirementsTxt(names: Set<string>): boolean {

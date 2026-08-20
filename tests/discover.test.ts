@@ -196,6 +196,26 @@ test("commented [tool.poetry] is not poetry", () => {
   expect(projects.some((p) => p.managers.some((m) => m.name === "pip"))).toBe(false);
 });
 
+test("scalar project key is not pip", () => {
+  const projects = discoverProjects(
+    "/scalar-project",
+    memoryFs({
+      "/scalar-project/pyproject.toml": `project = "x"\n`,
+    }),
+  );
+  expect(projects.some((p) => p.managers.some((m) => m.name === "pip"))).toBe(false);
+});
+
+test("scalar tool.poetry key is not poetry", () => {
+  const projects = discoverProjects(
+    "/scalar-poetry",
+    memoryFs({
+      "/scalar-poetry/pyproject.toml": `[tool]\npoetry = "x"\n`,
+    }),
+  );
+  expect(projects.some((p) => p.managers.some((m) => m.name === "poetry"))).toBe(false);
+});
+
 test("skip directories are not walked for repos or PM roots", () => {
   const projects = discoverProjects(
     "/root",
