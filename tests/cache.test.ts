@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFsCache, type AdvisoryResult } from "../src/cache";
@@ -22,6 +22,14 @@ test("lockfile digest is returned within TTL and missed after expiry", () => {
   cache.putLockfile("abc", emptyResult);
   expect(cache.getLockfile("abc")).toEqual(emptyResult);
   now = 1_000 + 86_400_000;
+  expect(cache.getLockfile("abc")).toBeNull();
+});
+
+test("a corrupt lockfile cache entry is treated as a miss", () => {
+  const dir = join(cacheDir, "corrupt");
+  const cache = createFsCache(dir, () => 1_000, 86_400_000);
+  mkdirSync(join(dir, "lockfile"), { recursive: true });
+  writeFileSync(join(dir, "lockfile", `${encodeURIComponent("abc")}.json`), "{not-json");
   expect(cache.getLockfile("abc")).toBeNull();
 });
 

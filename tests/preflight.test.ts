@@ -97,6 +97,35 @@ test("poetry, pip, and pipenv primaries require no binary", () => {
   expect(result.missing).toEqual([]);
 });
 
+test("missing yarn bun and uv primaries each emit pm.missing-binary", () => {
+  for (const name of ["yarn", "bun", "uv"] as const) {
+    const project: Project = {
+      root: "/p",
+      gitRoot: "/p",
+      managers: [
+        {
+          name,
+          role: "primary",
+          manifestPath: "/p/manifest",
+          lockfilePath: "/p/lock",
+          configPath: null,
+        },
+      ],
+    };
+    const result = preflight(project, { which: () => null });
+    expect(result.missing).toEqual([{ manager: name, binary: name }]);
+    expect(result.warnings[0]).toEqual(
+      expect.objectContaining({
+        code: "pm.missing-binary",
+        kind: "missing-binary",
+        severity: "info",
+        fixable: false,
+        manager: name,
+      }),
+    );
+  }
+});
+
 test("uv primary does require the uv binary", () => {
   const project: Project = {
     root: "/py",

@@ -100,12 +100,22 @@ function parseLayer(toml: string): {
   overrides: Record<string, unknown>;
   perManager: Partial<Record<PackageManager, Record<string, unknown>>>;
 } {
-  const parsed = parse(toml);
   const overrides: Record<string, unknown> = {};
   const perManager: Partial<Record<PackageManager, Record<string, unknown>>> =
     {};
   let preset: PresetName | undefined;
   let enabledManagers: PackageManager[] | undefined;
+
+  let parsed: Record<string, unknown>;
+  try {
+    const raw: unknown = parse(toml);
+    if (!isPlainObject(raw)) {
+      return { overrides: {}, perManager: {} };
+    }
+    parsed = raw;
+  } catch {
+    return { overrides: {}, perManager: {} };
+  }
 
   for (const [key, value] of Object.entries(parsed)) {
     if (key === "preset" && isPresetName(value)) {

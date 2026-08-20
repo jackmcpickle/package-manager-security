@@ -309,6 +309,64 @@ test("uv plus poetry makes poetry leftover and uv primary", () => {
   expect(projects[0]?.managers.some((m) => m.name === "poetry" && m.role === "leftover")).toBe(true);
 });
 
+test("packageManager yarn@4 without .yarnrc.yml is still Berry when yarn.lock exists", () => {
+  const projects = discoverProjects(
+    "/berry",
+    memoryFs({
+      "/berry/package.json": `{"name":"berry","packageManager":"yarn@4.5.0"}`,
+      "/berry/yarn.lock": "# yarn\n",
+    }),
+  );
+  expect(projects[0]?.managers).toEqual([
+    expect.objectContaining({
+      name: "yarn",
+      role: "primary",
+      lockfilePath: "/berry/yarn.lock",
+      configPath: null,
+    }),
+  ]);
+});
+
+test("yarn.lock beside a pinned npm project is leftover yarn", () => {
+  const projects = discoverProjects(
+    "/app",
+    memoryFs({
+      "/app/package.json": `{"name":"app","packageManager":"npm@10.9.0"}`,
+      "/app/package-lock.json": `{"lockfileVersion":3}`,
+      "/app/yarn.lock": "# yarn\n",
+    }),
+  );
+  expect(projects[0]?.managers.some((m) => m.name === "npm" && m.role === "primary")).toBe(true);
+  expect(projects[0]?.managers.some((m) => m.name === "yarn" && m.role === "leftover")).toBe(true);
+});
+
+test("bun.lock beside a pinned npm project is leftover bun", () => {
+  const projects = discoverProjects(
+    "/app",
+    memoryFs({
+      "/app/package.json": `{"name":"app","packageManager":"npm@10.9.0"}`,
+      "/app/package-lock.json": `{"lockfileVersion":3}`,
+      "/app/bun.lock": `{"lockfileVersion":1}`,
+    }),
+  );
+  expect(projects[0]?.managers.some((m) => m.name === "npm" && m.role === "primary")).toBe(true);
+  expect(projects[0]?.managers.some((m) => m.name === "bun" && m.role === "leftover")).toBe(true);
+});
+
+test("stray uv.lock beside npm without a Python project is leftover uv", () => {
+  const projects = discoverProjects(
+    "/app",
+    memoryFs({
+      "/app/package.json": `{"name":"app","packageManager":"npm@10.9.0"}`,
+      "/app/package-lock.json": `{"lockfileVersion":3}`,
+      "/app/uv.lock": "version = 1\n",
+    }),
+  );
+  expect(projects[0]?.managers.some((m) => m.name === "npm" && m.role === "primary")).toBe(true);
+  expect(projects[0]?.managers.some((m) => m.name === "uv" && m.role === "leftover")).toBe(true);
+  expect(projects[0]?.managers.some((m) => m.name === "uv" && m.role === "primary")).toBe(false);
+});
+
 test("skip directories are not walked for repos or PM roots", () => {
   const projects = discoverProjects(
     "/root",

@@ -15,7 +15,7 @@ const OSV_MANAGERS = new Set<PackageManager>(["poetry", "pip", "pipenv"]);
 
 export async function auditAdvisories(
   project: Project,
-  _policy: Policy,
+  policy: Policy,
   deps: {
     cache: Cache;
     now: () => number;
@@ -32,7 +32,10 @@ export async function auditAdvisories(
 ): Promise<AdvisoryResult> {
   void deps.now;
   const primaries = project.managers.filter(
-    (m) => m.role === "primary" && LIVE_MANAGERS.has(m.name),
+    (m) =>
+      m.role === "primary" &&
+      LIVE_MANAGERS.has(m.name) &&
+      policy.enabledManagers.includes(m.name),
   );
   const python = project.managers.filter(
     (m) => m.role === "primary" && OSV_MANAGERS.has(m.name),
@@ -89,7 +92,8 @@ async function runPrimaries(
       const cached = deps.cache.getLockfile(digest);
       if (cached) {
         fromCache = true;
-        findings.push(...cached.findings);
+        const path = manager.lockfilePath ?? manager.manifestPath;
+        findings.push(...cached.findings.map((finding) => ({ ...finding, path })));
         continue;
       }
     }

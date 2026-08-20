@@ -66,6 +66,22 @@ ignoreScripts = false
   expect(policy.perManager.pnpm?.ignoreScripts).toBe(true);
 });
 
+test("invalid TOML in a layer is skipped so later layers still apply", () => {
+  const policy = loadPolicy({
+    userToml: `preset = "relaxed"\nthis is not toml [[[`,
+    repoToml: `preset = "strict"\n`,
+  });
+  expect(policy.preset).toBe("strict");
+});
+
+test("invalid TOML as the only layer leaves standard defaults", () => {
+  const policy = loadPolicy({
+    userToml: `preset = "strict"\n[[[`,
+  });
+  expect(policy.preset).toBe("standard");
+  expect(policy.enabledManagers).toEqual(["npm", "pnpm", "yarn", "bun", "uv"]);
+});
+
 test("rejects poetry pip and pipenv as per-manager tables", () => {
   const policy = loadPolicy({
     repoToml: `

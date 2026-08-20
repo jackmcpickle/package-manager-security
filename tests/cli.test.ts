@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { applySettings } from "../src/apply-settings";
@@ -717,6 +717,166 @@ test("--apply on a poetry project never runs uv migrate commands", async () => {
   });
   expect(calls.every((argv) => argv[0] !== "uv")).toBe(true);
   expect(written.some((path) => path.endsWith("uv.toml") || path.endsWith("uv.lock"))).toBe(false);
+});
+
+test("XDG_CONFIG_HOME wins over ~/.config/pmsec when CLI loads user config", async () => {
+  mkdirSync(join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"), { recursive: true });
+  const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
+  const home = mkdtempSync(join(tmpdir(), "pmsec-home-"));
+  const xdg = mkdtempSync(join(tmpdir(), "pmsec-xdg-"));
+  mkdirSync(join(home, ".config", "pmsec"), { recursive: true });
+  mkdirSync(join(xdg, "pmsec"), { recursive: true });
+  writeFileSync(join(home, ".config", "pmsec", "config.toml"), `preset = "standard"\n`);
+  writeFileSync(join(xdg, "pmsec", "config.toml"), `preset = "relaxed"\n`);
+  const stdout: string[] = [];
+  const result = await run(["audit", root], {
+    stdout: { write: (s: string) => stdout.push(s) },
+    stderr: { write: () => undefined },
+    cwd: import.meta.dir,
+    env: { HOME: home, XDG_CONFIG_HOME: xdg },
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "xdg"), () => 1_000, 86_400_000),
+  });
+  expect(stdout.join("")).not.toContain("scripts.unrestricted");
+  expect(result.exitCode).toBe(0);
+  rmSync(home, { recursive: true, force: true });
+  rmSync(xdg, { recursive: true, force: true });
+});
+
+test("omitting --report does not write a markdown file", async () => {
+  mkdirSync(join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"), { recursive: true });
+  const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
+  const written: string[] = [];
+  await run(["audit", root], {
+    stdout: { write: () => undefined },
+    stderr: { write: () => undefined },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "no-report"), () => 1_000, 86_400_000),
+    writeFile: (path) => {
+      written.push(path);
+    },
+  });
+  expect(written.filter((path) => path.endsWith(".md"))).toEqual([]);
+});
+
+test("--report creates missing parent directories and writes markdown", async () => {
+  mkdirSync(join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"), { recursive: true });
+  const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
+  const outDir = mkdtempSync(join(tmpdir(), "pmsec-report-"));
+  const reportPath = join(outDir, "nested", "deep", "report.md");
+  const result = await run(["audit", root, "--report", reportPath], {
+    stdout: { write: () => undefined },
+    stderr: { write: () => undefined },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "report-mkdir"), () => 1_000, 86_400_000),
+  });
+  expect(existsSync(reportPath)).toBe(true);
+  expect(readFileSync(reportPath, "utf8")).toContain("scripts.unrestricted");
+  expect(result.exitCode).toBe(1);
+  rmSync(outDir, { recursive: true, force: true });
+});
+
+test("--concurrency 1 runs advisory audits serially; default and invalid values may overlap", async () => {
+  mkdirSync(join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"), { recursive: true });
+  mkdirSync(join(import.meta.dir, "fixtures/discover/many-repos/beta/.git"), { recursive: true });
+  const root = join(import.meta.dir, "fixtures/discover/many-repos");
+
+  const maxFor = async (extra: string[]) => {
+    let inFlight = 0;
+    let max = 0;
+    await run(["audit", root, ...extra], {
+      stdout: { write: () => undefined },
+      stderr: { write: () => undefined },
+      cwd: import.meta.dir,
+      env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+      run: async () => {
+        inFlight += 1;
+        max = Math.max(max, inFlight);
+        await Bun.sleep(25);
+        inFlight -= 1;
+        return { code: 0, stdout: `{"advisories":{}}`, stderr: "" };
+      },
+      which: () => "/usr/bin/npm",
+      cache: createFsCache(join(cacheDir, `conc-${extra.join("-") || "default"}`), () => 1_000, 86_400_000),
+    });
+    return max;
+  };
+
+  expect(await maxFor(["--concurrency", "1"])).toBe(1);
+  expect(await maxFor([])).toBeGreaterThan(1);
+  expect(await maxFor(["--concurrency", "0"])).toBeGreaterThan(1);
+  expect(await maxFor(["--concurrency", "nope"])).toBeGreaterThan(1);
+});
+
+test("--apply --force --commit through run() writes on a dirty tree and commits", async () => {
+  mkdirSync(join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"), { recursive: true });
+  const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
+  const written: Record<string, string> = {};
+  const commits: Array<{ root: string; files: string[] }> = [];
+  const result = await run(["audit", root, "--apply", "--force", "--commit"], {
+    stdout: { write: () => undefined },
+    stderr: { write: () => undefined },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "force-commit"), () => 1_000, 86_400_000),
+    writeFile: (path, body) => {
+      written[path] = body;
+    },
+    gitStatus: () => "dirty",
+    gitCommit: (gitRoot, _message, files) => {
+      commits.push({ root: gitRoot, files });
+      return true;
+    },
+  });
+  expect(Object.values(written).some((body) => body.includes("ignore-scripts=true"))).toBe(true);
+  expect(commits).toHaveLength(1);
+  expect(commits[0]!.root).toBe(root);
+  expect(result.exitCode).not.toBe(2);
+});
+
+test("two primaries with one missing binary still audit the other", async () => {
+  const files: Record<string, string> = {
+    ...CLEAN_NPM_FILES,
+    "/p/pyproject.toml": `[tool.uv]\nexclude-newer = 30\n`,
+    "/p/uv.lock": `version = 1\n`,
+  };
+  const fs = memoryFs(files, ["/p/.git"]);
+  const calls: string[][] = [];
+  const result = await auditPath("/p", {
+    policy: loadPolicy({}),
+    apply: false,
+    applyAdvisories: false,
+    interactive: false,
+    concurrency: 4,
+    deps: {
+      ...fs,
+      which: (binary) => (binary === "uv" ? "/usr/bin/uv" : null),
+      run: async (argv) => {
+        calls.push(argv);
+        return {
+          code: 0,
+          stdout: JSON.stringify([{ name: "oldpkg", version: "1.0.0", status: "deprecated" }]),
+          stderr: "",
+        };
+      },
+      cache: createFsCache(join(cacheDir, "two-primary"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+      digest: () => "two-primary",
+    },
+  });
+  const findings = result.projects.flatMap((row) => row.findings);
+  expect(findings.some((f) => f.code === "pm.missing-binary" && f.manager === "npm")).toBe(true);
+  expect(findings.some((f) => f.kind === "deprecated")).toBe(true);
+  expect(calls).toEqual([["uv", "audit", "--output-format", "json", "--frozen"]]);
 });
 
 test("stdout uses ANSI colors when color is enabled and none by default", async () => {

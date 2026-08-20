@@ -218,7 +218,7 @@ function detectManagers(dir: string, fs: Fs): DetectedManager[] {
   if (bun) managers.push(bun);
   const npm = detectNpm(dir, names, packageManager, jsPrimary);
   if (npm) managers.push(npm);
-  const uv = detectUv(dir, names, fs);
+  const uv = detectUv(dir, names, fs, jsPrimary);
   if (uv) managers.push(uv);
   const poetry = detectPoetry(dir, names, fs, uv !== null);
   if (poetry) managers.push(poetry);
@@ -407,9 +407,16 @@ function detectPip(
   return manager("pip", "primary", manifest, null, null);
 }
 
-function detectUv(dir: string, names: Set<string>, fs: Fs): DetectedManager | null {
+function detectUv(
+  dir: string,
+  names: Set<string>,
+  fs: Fs,
+  jsPrimary: PackageManager | null,
+): DetectedManager | null {
   const toolUv = hasToolUv(dir, fs);
   if (!names.has("uv.lock") && !toolUv) return null;
+  const pythonProject = toolUv || hasProjectTable(dir, fs);
+  const role: ManagerRole = jsPrimary !== null && !pythonProject ? "leftover" : "primary";
   const configPath = names.has("uv.toml")
     ? join(dir, "uv.toml")
     : toolUv
@@ -417,7 +424,7 @@ function detectUv(dir: string, names: Set<string>, fs: Fs): DetectedManager | nu
       : null;
   return manager(
     "uv",
-    "primary",
+    role,
     join(dir, "pyproject.toml"),
     names.has("uv.lock") ? join(dir, "uv.lock") : null,
     configPath,

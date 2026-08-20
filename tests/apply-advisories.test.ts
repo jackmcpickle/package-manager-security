@@ -131,6 +131,20 @@ test("apply advisories uses uv lock --upgrade-package", async () => {
   expect(result.skipped).toBeNull();
 });
 
+test("apply advisories does not run an upgrade command for yarn or bun", async () => {
+  for (const name of ["yarn", "bun"] as const) {
+    const ran: string[][] = [];
+    const result = await applyAdvisories(projectFor(name), [findingFor(name)], {
+      run: okRun(ran),
+      allowMajors: true,
+      currentVersions: { "left-pad": "1.0.0" },
+      fixVersions: { "left-pad": "1.3.0" },
+    });
+    expect(ran).toEqual([]);
+    expect(result.skipped).toBe("nothing");
+  }
+});
+
 test("apply advisories does not write for non-uv python", async () => {
   for (const name of ["poetry", "pip", "pipenv"] as const) {
     const ran: string[][] = [];

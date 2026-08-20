@@ -3,3 +3,4 @@ dist
 .superpowers
 .worktrees
 .cache
+.handover

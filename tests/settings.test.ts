@@ -645,6 +645,59 @@ test("bun without install.registry emits registry.unpinned", () => {
   expect(findings.some((f) => f.code === "registry.unpinned")).toBe(true);
 });
 
+test("leftover yarn bun and uv lockfiles are high and not fixable", () => {
+  const project: Project = {
+    root: "/p",
+    gitRoot: "/p",
+    managers: [
+      {
+        name: "npm",
+        role: "primary",
+        manifestPath: "/p/package.json",
+        lockfilePath: "/p/package-lock.json",
+        configPath: "/p/.npmrc",
+      },
+      {
+        name: "yarn",
+        role: "leftover",
+        manifestPath: "/p/package.json",
+        lockfilePath: "/p/yarn.lock",
+        configPath: null,
+      },
+      {
+        name: "bun",
+        role: "leftover",
+        manifestPath: "/p/package.json",
+        lockfilePath: "/p/bun.lock",
+        configPath: null,
+      },
+      {
+        name: "uv",
+        role: "leftover",
+        manifestPath: "/p/pyproject.toml",
+        lockfilePath: "/p/uv.lock",
+        configPath: null,
+      },
+    ],
+  };
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/.npmrc": validNpmrc,
+    "/p/yarn.lock": "# yarn\n",
+    "/p/bun.lock": "{}\n",
+    "/p/uv.lock": "version = 1\n",
+  };
+  const leftovers = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  }).filter((f) => f.code === "lockfile.leftover");
+  expect(leftovers).toEqual([
+    expect.objectContaining({ manager: "yarn", severity: "high", fixable: false, path: "/p/yarn.lock" }),
+    expect.objectContaining({ manager: "bun", severity: "high", fixable: false, path: "/p/bun.lock" }),
+    expect.objectContaining({ manager: "uv", severity: "high", fixable: false, path: "/p/uv.lock" }),
+  ]);
+});
+
 test("malformed yarn packageManager pin is unpinned", () => {
   const project: Project = {
     root: "/y",

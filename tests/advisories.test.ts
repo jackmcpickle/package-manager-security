@@ -802,6 +802,157 @@ test("live advisory argv is one native command per manager", async () => {
   }
 });
 
+test("enabledManagers omitting a live manager skips its native audit subprocess", async () => {
+  const calls: string[][] = [];
+  const cache = createFsCache(join(cacheDir8, "disabled"), () => 1_000, 86_400_000);
+  const result = await auditAdvisories(
+    {
+      root: "/p",
+      gitRoot: "/p",
+      managers: [
+        {
+          name: "pnpm",
+          role: "primary",
+          manifestPath: "/p/package.json",
+          lockfilePath: "/p/pnpm-lock.yaml",
+          configPath: "/p/pnpm-workspace.yaml",
+        },
+      ],
+    },
+    loadPolicy({ scanToml: 'enabledManagers = ["npm", "yarn", "bun", "uv"]\n' }),
+    {
+      cache,
+      now: () => 1_000,
+      digest: () => "disabled-pnpm",
+      readFile: () => "lock",
+      run: async (argv) => {
+        calls.push(argv);
+        return { code: 1, stdout: `{"advisories":{}}`, stderr: "" };
+      },
+    },
+  );
+  expect(calls).toEqual([]);
+  expect(result.findings).toEqual([]);
+  expect(result.ranLive).toBe(false);
+});
+
+test("npm v7 vulnerabilities map fills package currentVersion and fixVersion", async () => {
+  const cache = createFsCache(join(cacheDir8, "npm-v7"), () => 1_000, 86_400_000);
+  const result = await auditAdvisories(
+    {
+      root: "/p",
+      gitRoot: "/p",
+      managers: [
+        {
+          name: "npm",
+          role: "primary",
+          manifestPath: "/p/package.json",
+          lockfilePath: "/p/package-lock.json",
+          configPath: "/p/.npmrc",
+        },
+      ],
+    },
+    loadPolicy({}),
+    {
+      cache,
+      now: () => 1_000,
+      digest: () => "npm-v7",
+      readFile: () => "lock",
+      run: async () => ({
+        code: 1,
+        stdout: JSON.stringify({
+          auditReportVersion: 2,
+          vulnerabilities: {
+            "left-pad": {
+              name: "left-pad",
+              severity: "high",
+              via: [
+                {
+                  github_advisory_id: "GHSA-v7",
+                  title: "left-pad v7 advisory",
+                  severity: "high",
+                  version: "1.0.0",
+                },
+              ],
+              fixAvailable: { name: "left-pad", version: "1.3.0" },
+            },
+          },
+        }),
+        stderr: "",
+      }),
+    },
+  );
+  const finding = result.findings.find((row) => row.kind === "advisory");
+  expect(finding?.package).toBe("left-pad");
+  expect(finding?.code).toBe("GHSA-v7");
+  expect(finding?.currentVersion).toBe("1.0.0");
+  expect(finding?.fixVersion).toBe("1.3.0");
+});
+
+test("cached advisory findings do not leak another repo path", async () => {
+  const cache = createFsCache(join(cacheDir8, "path-leak"), () => 1_000, 86_400_000);
+  const deps = {
+    cache,
+    now: () => 1_000,
+    digest: () => "shared-digest",
+    readFile: () => "identical-lock",
+    run: async () => ({
+      code: 1,
+      stdout: JSON.stringify({
+        advisories: {
+          "1": {
+            module_name: "left-pad",
+            severity: "high",
+            github_advisory_id: "GHSA-share",
+            title: "shared advisory",
+            findings: [{ version: "1.0.0" }],
+          },
+        },
+      }),
+      stderr: "",
+    }),
+  };
+  const first = await auditAdvisories(
+    {
+      root: "/a",
+      gitRoot: "/a",
+      managers: [
+        {
+          name: "npm",
+          role: "primary",
+          manifestPath: "/a/package.json",
+          lockfilePath: "/a/package-lock.json",
+          configPath: "/a/.npmrc",
+        },
+      ],
+    },
+    loadPolicy({}),
+    deps,
+  );
+  expect(first.findings[0]?.path).toBe("/a/package-lock.json");
+
+  const second = await auditAdvisories(
+    {
+      root: "/b",
+      gitRoot: "/b",
+      managers: [
+        {
+          name: "npm",
+          role: "primary",
+          manifestPath: "/b/package.json",
+          lockfilePath: "/b/package-lock.json",
+          configPath: "/b/.npmrc",
+        },
+      ],
+    },
+    loadPolicy({}),
+    deps,
+  );
+  expect(second.fromCache).toBe(true);
+  expect(second.findings[0]?.path).toBe("/b/package-lock.json");
+  expect(second.findings[0]?.path).not.toBe("/a/package-lock.json");
+});
+
 test("advisory runner throwing also surfaces an incomplete-tagged error", async () => {
   const cache = createFsCache(join(cacheDir8, "throws"), () => 1_000, 86_400_000);
   const throwsProject: Project = {

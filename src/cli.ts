@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 import type { ApplyPrompt } from "./apply-advisories";
 import { auditPath, defaultDigest, type AuditRun } from "./audit";
 import { CACHE_TTL_MS, createFsCache, type Cache } from "./cache";
@@ -233,6 +233,7 @@ function parseAuditArgs(args: string[]): {
 }
 
 function writeFile(path: string, body: string): void {
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, body);
 }
 
