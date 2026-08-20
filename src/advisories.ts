@@ -107,7 +107,7 @@ async function runPrimaries(
       throw incompleteError();
     }
 
-    const parsed = parseJson(output.stdout);
+    const parsed = output.stdout.trim() === "" ? {} : parseJson(output.stdout);
     const live = mapAuditJson(parsed, manager.name, manager.lockfilePath ?? manager.manifestPath);
     ranLive = true;
     findings.push(...live.findings);

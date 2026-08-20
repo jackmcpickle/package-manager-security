@@ -693,6 +693,42 @@ test("yarn berry primary parses multi-line NDJSON stdout (real multi-vulnerabili
   expect(ansiHtml?.fixVersion).toBe("0.0.8");
 });
 
+test("yarn berry primary with empty stdout on a clean repo yields no findings without throwing", async () => {
+  const cache = createFsCache(join(cacheDir8, "yarn-empty"), () => 1_000, 86_400_000);
+  const calls: string[][] = [];
+  const yarnProject: Project = {
+    root: "/yn-clean",
+    gitRoot: "/yn-clean",
+    managers: [
+      {
+        name: "yarn",
+        role: "primary",
+        manifestPath: "/yn-clean/package.json",
+        lockfilePath: "/yn-clean/yarn.lock",
+        configPath: "/yn-clean/.yarnrc.yml",
+      },
+    ],
+  };
+  // `yarn npm audit --json` on a clean repo exits 0 and prints nothing at
+  // all (no JSON, not even `{}`). `parseJson` would throw on empty input,
+  // so runPrimaries must treat empty/whitespace stdout as "no findings"
+  // rather than an incomplete-audit failure.
+  const result = await auditAdvisories(yarnProject, loadPolicy({}), {
+    cache,
+    now: () => 1_000,
+    digest: () => "yarn-empty-digest",
+    readFile: () => "lock",
+    run: async (argv, cwd) => {
+      calls.push(argv);
+      expect(cwd).toBe("/yn-clean");
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  });
+  expect(calls).toEqual([["yarn", "npm", "audit", "--json"]]);
+  expect(result.findings).toEqual([]);
+  expect(result.ranLive).toBe(true);
+});
+
 test("advisory runner dying (non 0/1 exit code) throws an incomplete-tagged error", async () => {
   const cache = createFsCache(join(cacheDir8, "incomplete"), () => 1_000, 86_400_000);
   const deadProject: Project = {
