@@ -1,5 +1,7 @@
 node_modules
 dist
+coverage
 .superpowers
 .worktrees
 .cache
+.handover

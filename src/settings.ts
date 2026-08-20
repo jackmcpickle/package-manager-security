@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
+
 import { parse as parseTomlRaw } from "smol-toml";
+
 import type {
   DetectedManager,
   Finding,
@@ -11,719 +13,1505 @@ import type {
 } from "./domain";
 import { PRESET_DEFAULTS } from "./policy";
 
-export type SettingsFs = {
+export interface SettingsFs {
   readFile?: (path: string) => string | null;
-};
+}
 
 type ReadFile = (path: string) => string | null;
 
-type ResolvedSettings = {
+interface ResolvedSettings {
   ignoreScripts: boolean;
   minReleaseAgeDays: number;
   auditLevel: string;
   requireLockfile: boolean;
   requirePmPin: boolean;
-};
+}
+
+interface ManagerVersion {
+  major: number;
+  minor: number;
+}
+
+type ManagerAuditor = (
+  project: Project,
+  manager: DetectedManager,
+  policy: Policy,
+  readFile: ReadFile
+) => Finding[];
 
 const AUDIT_RANK: Record<string, number> = {
+  critical: 4,
+  high: 3,
   info: 0,
   low: 1,
   moderate: 2,
-  high: 3,
-  critical: 4,
 };
 
-export function auditSettings(
-  project: Project,
-  policy: Policy,
-  opts?: SettingsFs,
-): Finding[] {
-  const readFile = opts?.readFile ?? defaultReadFile;
-  const findings: Finding[] = [];
+const PNPM_LEGACY_BUILD_KEYS = [
+  "onlyBuiltDependencies",
+  "onlyBuiltDependenciesFile",
+  "neverBuiltDependencies",
+  "ignoredBuiltDependencies",
+  "ignoreDepScripts",
+] as const;
 
-  for (const manager of project.managers) {
-    if (manager.role === "leftover") {
-      findings.push(leftoverFinding(manager));
-      continue;
-    }
-    if (manager.role === "unsupported") {
-      findings.push(unsupportedFinding(manager));
-      continue;
-    }
-    if (manager.role !== "primary") continue;
-    if (manager.name === "poetry" || manager.name === "pip" || manager.name === "pipenv") {
-      findings.push(notUsingUvFinding(manager));
-      continue;
-    }
-    if (!policy.enabledManagers.includes(manager.name)) continue;
+const PYTHON_LEGACY_MANAGERS: ReadonlySet<string> = new Set([
+  "poetry",
+  "pip",
+  "pipenv",
+]);
 
-    if (manager.name === "npm") {
-      findings.push(...auditNpm(project, manager, policy, readFile));
-    } else if (manager.name === "pnpm") {
-      findings.push(...auditPnpm(project, manager, policy, readFile));
-    } else if (manager.name === "yarn") {
-      findings.push(...auditYarn(project, manager, policy, readFile));
-    } else if (manager.name === "bun") {
-      findings.push(...auditBun(project, manager, policy, readFile));
-    } else if (manager.name === "uv") {
-      findings.push(...auditUv(project, manager, policy, readFile));
-    }
-  }
+const BUN_AUTO_SCRIPT_VALUES: ReadonlySet<string> = new Set([
+  "auto",
+  "force",
+  "fallback",
+  "true",
+  "all",
+]);
 
-  return findings;
-}
+const MANAGER_VERSION_PATTERN =
+  /^(?<name>[a-z]+)@(?<major>\d+)\.(?<minor>\d+)/u;
 
-function notUsingUvFinding(manager: DetectedManager): Finding {
-  return {
-    kind: "not-using-uv",
-    code: "python.not-uv",
-    message: `${manager.name} project is not using uv`,
-    severity: "high",
-    path: manager.lockfilePath ?? manager.manifestPath,
-    fixable: false,
-    manager: manager.name,
-  };
-}
+const YARN_BERRY_PATTERN =
+  /^yarn@(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 
-function leftoverFinding(manager: DetectedManager): Finding {
-  return {
-    kind: "leftover-lockfile",
-    code: "lockfile.leftover",
-    message: `Leftover ${manager.name} lockfile is not an apply target`,
-    severity: "high",
-    path: manager.lockfilePath ?? manager.manifestPath,
-    fixable: false,
-    manager: manager.name,
-  };
-}
+const AGE_UNIT_PATTERN =
+  /^(?<amount>\d+(?:\.\d+)?)\s*(?<unit>m|min|mins|minutes|h|hr|hrs|hours|d|day|days|w|week|weeks)?$/u;
 
-function unsupportedFinding(manager: DetectedManager): Finding {
-  return {
-    kind: "unsupported-pm",
-    code: "pm.unsupported",
-    message: `${manager.name} is unsupported`,
-    severity: "high",
-    path: manager.lockfilePath ?? manager.manifestPath,
-    fixable: false,
-    manager: manager.name,
-  };
-}
+const STAR_PATTERN = /^\*+$/u;
 
-function auditNpm(
-  project: Project,
-  manager: DetectedManager,
-  policy: Policy,
-  readFile: ReadFile,
-): Finding[] {
-  const settings = resolveSettings(policy, "npm");
-  const npmrcPath = manager.configPath ?? `${project.root}/.npmrc`;
-  const npmrc = parseNpmrc(readFile(npmrcPath) ?? "");
-  const findings: Finding[] = [];
+const NPMRC_LINE_BREAK = /\r?\n/u;
 
-  if (settings.ignoreScripts && npmrc["ignore-scripts"] !== "true") {
-    findings.push(
-      setting(
-        "scripts.unrestricted",
-        "npm ignore-scripts must be true",
-        "high",
-        npmrcPath,
-        "npm",
-      ),
-    );
-  }
-
-  if (settings.requireLockfile && !lockfilePresent(manager, readFile, `${project.root}/package-lock.json`)) {
-    findings.push(
-      setting(
-        "lockfile.missing",
-        "package-lock.json is required",
-        "high",
-        manager.lockfilePath ?? `${project.root}/package-lock.json`,
-        "npm",
-      ),
-    );
-  }
-
-  if (!auditMeetsGate(npmrc["audit"] === "true", npmrc["audit-level"], settings.auditLevel)) {
-    findings.push(
-      setting(
-        "audit.disabled",
-        "npm audit must be enabled at the preset gate",
-        "high",
-        npmrcPath,
-        "npm",
-      ),
-    );
-  }
-
-  if (settings.minReleaseAgeDays > 0) {
-    const days = parseNumber(npmrc["min-release-age"]);
-    if (days === null || days < settings.minReleaseAgeDays) {
-      findings.push(
-        setting(
-          "min-age.disabled",
-          `min-release-age must be at least ${settings.minReleaseAgeDays} days`,
-          "high",
-          npmrcPath,
-          "npm",
-        ),
-      );
-    }
-  }
-
-  if (!hasText(npmrc["registry"])) {
-    findings.push(
-      setting(
-        "registry.unpinned",
-        "registry must be set in .npmrc",
-        pinSeverity(policy.preset),
-        npmrcPath,
-        "npm",
-      ),
-    );
-  }
-
-  if (settings.requirePmPin && !packageManagerStartsWith(readFile(manager.manifestPath), "npm@")) {
-    findings.push(
-      setting(
-        "pm.unpinned",
-        "package.json packageManager must start with npm@",
-        pinSeverity(policy.preset),
-        manager.manifestPath,
-        "npm",
-      ),
-    );
-  }
-
-  return findings;
-}
-
-function auditPnpm(
-  project: Project,
-  manager: DetectedManager,
-  policy: Policy,
-  readFile: ReadFile,
-): Finding[] {
-  const settings = resolveSettings(policy, "pnpm");
-  const yamlPath = manager.configPath ?? `${project.root}/pnpm-workspace.yaml`;
-  const yaml = parseYaml(readFile(yamlPath) ?? "");
-  const findings: Finding[] = [];
-
-  if (settings.ignoreScripts) {
-    const allowAll = yaml["dangerouslyAllowAllBuilds"] === true;
-    const hasAllowlist =
-      yaml["onlyBuiltDependencies"] !== undefined ||
-      yaml["neverBuiltDependencies"] !== undefined;
-    if (allowAll || !hasAllowlist) {
-      findings.push(
-        setting(
-          "scripts.unrestricted",
-          "pnpm builds must be restricted",
-          "high",
-          yamlPath,
-          "pnpm",
-        ),
-      );
-    }
-  }
-
-  const lockfileOff = yaml["lockfile"] === false;
-  if (
-    settings.requireLockfile &&
-    (lockfileOff || !lockfilePresent(manager, readFile, `${project.root}/pnpm-lock.yaml`))
-  ) {
-    findings.push(
-      setting(
-        "lockfile.missing",
-        "pnpm-lock.yaml is required",
-        "high",
-        manager.lockfilePath ?? `${project.root}/pnpm-lock.yaml`,
-        "pnpm",
-      ),
-    );
-  }
-
-  if (!auditMeetsGate(isTruthy(yaml["audit"]), yaml["auditLevel"] ?? yaml["audit-level"], settings.auditLevel)) {
-    findings.push(
-      setting(
-        "audit.disabled",
-        "pnpm audit must be enabled at the preset gate",
-        "high",
-        yamlPath,
-        "pnpm",
-      ),
-    );
-  }
-
-  if (settings.minReleaseAgeDays > 0) {
-    const hours = parsePnpmAgeHours(yaml["minimumReleaseAge"]);
-    const requiredHours = settings.minReleaseAgeDays * 24;
-    if (hours === null || hours < requiredHours) {
-      findings.push(
-        setting(
-          "min-age.disabled",
-          `minimumReleaseAge must be at least ${requiredHours * 60} minutes`,
-          "high",
-          yamlPath,
-          "pnpm",
-        ),
-      );
-    }
-  }
-
-  if (!pnpmRegistryPinned(yaml)) {
-    findings.push(
-      setting(
-        "registry.unpinned",
-        "registry or registries.default must be set",
-        pinSeverity(policy.preset),
-        yamlPath,
-        "pnpm",
-      ),
-    );
-  }
-
-  if (settings.requirePmPin && !packageManagerStartsWith(readFile(manager.manifestPath), "pnpm@")) {
-    findings.push(
-      setting(
-        "pm.unpinned",
-        "package.json packageManager must start with pnpm@",
-        pinSeverity(policy.preset),
-        manager.manifestPath,
-        "pnpm",
-      ),
-    );
-  }
-
-  return findings;
-}
-
-function auditYarn(
-  project: Project,
-  manager: DetectedManager,
-  policy: Policy,
-  readFile: ReadFile,
-): Finding[] {
-  const settings = resolveSettings(policy, "yarn");
-  const yarnrcPath = manager.configPath ?? `${project.root}/.yarnrc.yml`;
-  const yarnrc = parseYaml(readFile(yarnrcPath) ?? "");
-  const findings: Finding[] = [];
-
-  if (settings.ignoreScripts && yarnrc["enableScripts"] !== false) {
-    findings.push(
-      setting(
-        "scripts.unrestricted",
-        "yarn enableScripts must be false",
-        "high",
-        yarnrcPath,
-        "yarn",
-      ),
-    );
-  }
-
-  if (settings.requireLockfile && !lockfilePresent(manager, readFile, `${project.root}/yarn.lock`)) {
-    findings.push(
-      setting(
-        "lockfile.missing",
-        "yarn.lock is required",
-        "high",
-        manager.lockfilePath ?? `${project.root}/yarn.lock`,
-        "yarn",
-      ),
-    );
-  }
-
-  if (yarnAuditDisabled(yarnrc)) {
-    findings.push(
-      setting(
-        "audit.disabled",
-        "yarn audit must not be disabled",
-        "high",
-        yarnrcPath,
-        "yarn",
-      ),
-    );
-  }
-
-  if (!hasText(yarnrc["npmRegistryServer"])) {
-    findings.push(
-      setting(
-        "registry.unpinned",
-        "npmRegistryServer must be set",
-        pinSeverity(policy.preset),
-        yarnrcPath,
-        "yarn",
-      ),
-    );
-  }
-
-  if (settings.requirePmPin && !packageManagerYarnBerry(readFile(manager.manifestPath))) {
-    findings.push(
-      setting(
-        "pm.unpinned",
-        "package.json packageManager must be yarn@ major >= 2",
-        pinSeverity(policy.preset),
-        manager.manifestPath,
-        "yarn",
-      ),
-    );
-  }
-
-  return findings;
-}
-
-function auditBun(
-  project: Project,
-  manager: DetectedManager,
-  policy: Policy,
-  readFile: ReadFile,
-): Finding[] {
-  const settings = resolveSettings(policy, "bun");
-  const bunfigPath = manager.configPath ?? `${project.root}/bunfig.toml`;
-  const bunfig = parseToml(readFile(bunfigPath) ?? "");
-  const install = isPlainObject(bunfig["install"]) ? bunfig["install"] : {};
-  const findings: Finding[] = [];
-
-  if (settings.ignoreScripts && bunScriptsUnrestricted(bunfig, install)) {
-    findings.push(
-      setting(
-        "scripts.unrestricted",
-        "bun scripts must be restricted",
-        "high",
-        bunfigPath,
-        "bun",
-      ),
-    );
-  }
-
-  if (settings.requireLockfile && !bunLockfilePresent(project, manager, readFile)) {
-    findings.push(
-      setting(
-        "lockfile.missing",
-        "bun.lock or bun.lockb is required",
-        "high",
-        manager.lockfilePath ?? `${project.root}/bun.lock`,
-        "bun",
-      ),
-    );
-  }
-
-  if (!bunRegistryPinned(install)) {
-    findings.push(
-      setting(
-        "registry.unpinned",
-        "install.registry must be set",
-        pinSeverity(policy.preset),
-        bunfigPath,
-        "bun",
-      ),
-    );
-  }
-
-  return findings;
-}
-
-function auditUv(
-  project: Project,
-  manager: DetectedManager,
-  policy: Policy,
-  readFile: ReadFile,
-): Finding[] {
-  const settings = resolveSettings(policy, "uv");
-  const cfg = readUvConfig(project, readFile);
-  const configPath = manager.configPath ?? `${project.root}/pyproject.toml`;
-  const findings: Finding[] = [];
-
-  if (settings.requireLockfile && !lockfilePresent(manager, readFile, `${project.root}/uv.lock`)) {
-    findings.push(
-      setting(
-        "lockfile.missing",
-        "uv.lock is required",
-        "high",
-        manager.lockfilePath ?? `${project.root}/uv.lock`,
-        "uv",
-      ),
-    );
-  }
-
-  if (settings.minReleaseAgeDays > 0 && !uvExcludeNewerMeets(cfg["exclude-newer"], settings.minReleaseAgeDays)) {
-    findings.push(
-      setting(
-        "min-age.disabled",
-        `exclude-newer must meet ${settings.minReleaseAgeDays} days`,
-        "high",
-        configPath,
-        "uv",
-      ),
-    );
-  }
-
-  if (policy.preset === "strict" && uvHasExtraIndexes(cfg) && cfg["index-strategy"] !== "first-index") {
-    findings.push(
-      setting(
-        "registry.unpinned",
-        'extra indexes require index-strategy = "first-index"',
-        pinSeverity(policy.preset),
-        configPath,
-        "uv",
-      ),
-    );
-  }
-
-  return findings;
-}
-
-function setting(
-  code: string,
-  message: string,
-  severity: Severity,
-  path: string,
-  manager: PackageManager,
-): Finding {
-  return {
-    kind: "settings",
-    code,
-    message,
-    severity,
-    path,
-    fixable: true,
-    manager,
-  };
-}
-
-function resolveSettings(policy: Policy, name: PackageManager): ResolvedSettings {
-  const base = PRESET_DEFAULTS[policy.preset];
-  const extra = { ...policy.overrides, ...policy.perManager[name] };
-  return {
-    ignoreScripts:
-      typeof extra.ignoreScripts === "boolean" ? extra.ignoreScripts : base.ignoreScripts,
-    minReleaseAgeDays:
-      typeof extra.minReleaseAgeDays === "number"
-        ? extra.minReleaseAgeDays
-        : base.minReleaseAgeDays,
-    auditLevel: typeof extra.auditLevel === "string" ? extra.auditLevel : base.auditLevel,
-    requireLockfile:
-      typeof extra.requireLockfile === "boolean" ? extra.requireLockfile : base.requireLockfile,
-    requirePmPin:
-      typeof extra.requirePmPin === "boolean" ? extra.requirePmPin : base.requirePmPin,
-  };
-}
-
-function pinSeverity(preset: PresetName): Severity {
-  return preset === "strict" ? "high" : "info";
-}
-
-function lockfilePresent(
-  manager: DetectedManager,
-  readFile: ReadFile,
-  fallback: string,
-): boolean {
-  const path = manager.lockfilePath ?? fallback;
-  return readFile(path) !== null;
-}
-
-function auditMeetsGate(
-  auditEnabled: boolean,
-  auditLevel: unknown,
-  gate: string,
-): boolean {
-  if (auditEnabled) return true;
-  const level = typeof auditLevel === "string" ? auditLevel.toLowerCase() : "";
-  const have = AUDIT_RANK[level];
-  const need = AUDIT_RANK[gate] ?? AUDIT_RANK.high;
-  return have !== undefined && need !== undefined && have <= need;
-}
-
-function packageManagerStartsWith(raw: string | null, prefix: string): boolean {
-  if (raw === null) return false;
+const defaultReadFile = (path: string): string | null => {
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!isPlainObject(parsed)) return false;
-    return typeof parsed.packageManager === "string" && parsed.packageManager.startsWith(prefix);
+    return readFileSync(path, "utf-8");
   } catch {
-    return false;
+    return null;
   }
-}
+};
 
-function parseNpmrc(raw: string): Record<string, string> {
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const hasText = (value: unknown): boolean =>
+  typeof value === "string" && value.trim() !== "";
+
+const parseNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  const n = Number(value.trim());
+  return Number.isFinite(n) ? n : null;
+};
+
+const isTruthy = (value: unknown): boolean =>
+  value === true || value === "true";
+
+const isStar = (entry: unknown): boolean =>
+  typeof entry === "string" && STAR_PATTERN.test(entry.trim());
+
+/** True when an exclude list uses a bare wildcard, which voids the gate. */
+const isBlanketExclude = (value: unknown): boolean => {
+  if (isStar(value)) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.some(isStar);
+  }
+  if (isPlainObject(value)) {
+    return Object.keys(value).some(isStar);
+  }
+  return false;
+};
+
+const parseNpmrc = (raw: string): Record<string, string> => {
   const out: Record<string, string> = {};
-  for (const line of raw.split(/\r?\n/)) {
+  for (const line of raw.split(NPMRC_LINE_BREAK)) {
     const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#") || trimmed.startsWith(";")) continue;
+    if (trimmed === "" || trimmed.startsWith("#") || trimmed.startsWith(";")) {
+      continue;
+    }
     const eq = trimmed.indexOf("=");
-    if (eq <= 0) continue;
+    if (eq <= 0) {
+      continue;
+    }
     const key = trimmed.slice(0, eq).trim();
     const value = trimmed.slice(eq + 1).trim();
     out[key] = value;
   }
   return out;
-}
+};
 
-function parseYaml(raw: string): Record<string, unknown> {
-  if (raw.trim() === "") return {};
+const parseYaml = (raw: string): Record<string, unknown> => {
+  if (raw.trim() === "") {
+    return {};
+  }
   try {
     const parsed: unknown = Bun.YAML.parse(raw);
     return isPlainObject(parsed) ? parsed : {};
   } catch {
     return {};
   }
-}
+};
 
-function pnpmRegistryPinned(yaml: Record<string, unknown>): boolean {
-  if (hasText(yaml["registry"])) return true;
-  const registries = yaml["registries"];
-  if (!isPlainObject(registries)) return false;
-  return hasText(registries["default"]);
-}
-
-function parsePnpmAgeHours(value: unknown): number | null {
-  // pnpm treats bare minimumReleaseAge numbers as MINUTES.
-  if (typeof value === "number" && Number.isFinite(value)) return value / 60;
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim().toLowerCase();
-  const match = trimmed.match(
-    /^(\d+(?:\.\d+)?)\s*(m|min|mins|minutes|h|hr|hrs|hours|d|day|days|w|week|weeks)?$/,
-  );
-  if (!match) {
-    const bare = parseNumber(trimmed);
-    return bare === null ? null : bare / 60;
+const parseToml = (raw: string): Record<string, unknown> => {
+  if (raw.trim() === "") {
+    return {};
   }
-  const amount = Number(match[1]);
-  if (!Number.isFinite(amount)) return null;
-  const unit = match[2] ?? "m";
-  if (unit.startsWith("w")) return amount * 24 * 7;
-  if (unit.startsWith("d")) return amount * 24;
-  if (unit.startsWith("m")) return amount / 60;
-  return amount;
-}
-
-function parseNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value !== "string") return null;
-  const n = Number(value.trim());
-  return Number.isFinite(n) ? n : null;
-}
-
-function isTruthy(value: unknown): boolean {
-  return value === true || value === "true";
-}
-
-function hasText(value: unknown): boolean {
-  return typeof value === "string" && value.trim() !== "";
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function yarnAuditDisabled(yarnrc: Record<string, unknown>): boolean {
-  return (
-    yarnrc["audit"] === false ||
-    yarnrc["npmAudit"] === false ||
-    yarnrc["enableNpmAudit"] === false
-  );
-}
-
-function packageManagerYarnBerry(raw: string | null): boolean {
-  if (raw === null) return false;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!isPlainObject(parsed)) return false;
-    const field = parsed.packageManager;
-    if (typeof field !== "string") return false;
-    const match = field.match(
-      /^yarn@(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/,
-    );
-    if (match === null) return false;
-    return Number(match[1]) >= 2;
-  } catch {
-    return false;
-  }
-}
-
-function bunScriptsUnrestricted(
-  bunfig: Record<string, unknown>,
-  install: Record<string, unknown>,
-): boolean {
-  if (bunAutoAllowsScripts(install["auto"])) return true;
-  const hasTrusted =
-    bunfig["trustedDependencies"] !== undefined || install["trustedDependencies"] !== undefined;
-  const hasSecurity = isPlainObject(install["security"]);
-  const denyScripts =
-    bunfig["ignoreScripts"] === true ||
-    install["ignoreScripts"] === true ||
-    bunfig["ignore-scripts"] === true ||
-    install["ignore-scripts"] === true;
-  return !hasTrusted && !hasSecurity && !denyScripts;
-}
-
-function bunAutoAllowsScripts(auto: unknown): boolean {
-  if (auto === true) return true;
-  if (typeof auto !== "string") return false;
-  const value = auto.trim().toLowerCase();
-  return value === "auto" || value === "force" || value === "fallback" || value === "true" || value === "all";
-}
-
-function bunRegistryPinned(install: Record<string, unknown>): boolean {
-  const registry = install["registry"];
-  if (hasText(registry)) return true;
-  return isPlainObject(registry) && hasText(registry["url"]);
-}
-
-function bunLockfilePresent(project: Project, manager: DetectedManager, readFile: ReadFile): boolean {
-  if (manager.lockfilePath !== null && readFile(manager.lockfilePath) !== null) return true;
-  return (
-    readFile(`${project.root}/bun.lock`) !== null || readFile(`${project.root}/bun.lockb`) !== null
-  );
-}
-
-function parseToml(raw: string): Record<string, unknown> {
-  if (raw.trim() === "") return {};
   try {
     const parsed: unknown = parseTomlRaw(raw);
     return isPlainObject(parsed) ? parsed : {};
   } catch {
     return {};
   }
-}
+};
 
-function readUvConfig(project: Project, readFile: ReadFile): Record<string, unknown> {
+const manifestField = (raw: string | null, key: string): unknown => {
+  if (raw === null) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isPlainObject(parsed) ? parsed[key] : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const setting = (
+  code: string,
+  message: string,
+  severity: Severity,
+  path: string,
+  manager: PackageManager
+): Finding => ({
+  code,
+  fixable: true,
+  kind: "settings",
+  manager,
+  message,
+  path,
+  severity,
+});
+
+/**
+ * A finding that flags a weaker-than-ideal but not broken configuration —
+ * typically relying on a safe default instead of pinning it explicitly.
+ * Those are safe to write automatically; notes needing human judgement are not.
+ */
+const advice = (
+  code: string,
+  message: string,
+  path: string,
+  manager: PackageManager,
+  severity: Severity = "info",
+  fixable = false
+): Finding => ({
+  code,
+  fixable,
+  kind: "settings",
+  manager,
+  message,
+  path,
+  severity,
+});
+
+const leftoverFinding = (manager: DetectedManager): Finding => ({
+  code: "lockfile.leftover",
+  fixable: false,
+  kind: "leftover-lockfile",
+  manager: manager.name,
+  message: `Leftover ${manager.name} lockfile is not an apply target`,
+  path: manager.lockfilePath ?? manager.manifestPath,
+  severity: "high",
+});
+
+const unsupportedFinding = (manager: DetectedManager): Finding => ({
+  code: "pm.unsupported",
+  fixable: false,
+  kind: "unsupported-pm",
+  manager: manager.name,
+  message: `${manager.name} is unsupported`,
+  path: manager.lockfilePath ?? manager.manifestPath,
+  severity: "high",
+});
+
+const notUsingUvFinding = (manager: DetectedManager): Finding => ({
+  code: "python.not-uv",
+  fixable: false,
+  kind: "not-using-uv",
+  manager: manager.name,
+  message: `${manager.name} project is not using uv`,
+  path: manager.lockfilePath ?? manager.manifestPath,
+  severity: "high",
+});
+
+const resolveSettings = (
+  policy: Policy,
+  name: PackageManager
+): ResolvedSettings => {
+  const base = PRESET_DEFAULTS[policy.preset];
+  const extra = { ...policy.overrides, ...policy.perManager[name] };
+  return {
+    auditLevel:
+      typeof extra.auditLevel === "string" ? extra.auditLevel : base.auditLevel,
+    ignoreScripts:
+      typeof extra.ignoreScripts === "boolean"
+        ? extra.ignoreScripts
+        : base.ignoreScripts,
+    minReleaseAgeDays:
+      typeof extra.minReleaseAgeDays === "number"
+        ? extra.minReleaseAgeDays
+        : base.minReleaseAgeDays,
+    requireLockfile:
+      typeof extra.requireLockfile === "boolean"
+        ? extra.requireLockfile
+        : base.requireLockfile,
+    requirePmPin:
+      typeof extra.requirePmPin === "boolean"
+        ? extra.requirePmPin
+        : base.requirePmPin,
+  };
+};
+
+const pinSeverity = (preset: PresetName): Severity =>
+  preset === "strict" ? "high" : "info";
+
+const defaultRelianceSeverity = (preset: PresetName): Severity =>
+  preset === "strict" ? "moderate" : "info";
+
+/** Reads the pinned version out of package.json `packageManager`. */
+const managerVersion = (
+  raw: string | null,
+  name: string
+): ManagerVersion | null => {
+  const field = manifestField(raw, "packageManager");
+  if (typeof field !== "string") {
+    return null;
+  }
+  const match = MANAGER_VERSION_PATTERN.exec(field);
+  if (match?.groups === undefined || match.groups["name"] !== name) {
+    return null;
+  }
+  return {
+    major: Number(match.groups["major"]),
+    minor: Number(match.groups["minor"]),
+  };
+};
+
+/**
+ * True when the pinned version is at least `major.minor`, or when no version is
+ * pinned at all — an unpinned repo is assumed to be on a current release, and
+ * `pm.unpinned` already nags about the missing pin.
+ */
+const atLeastOrUnknown = (
+  version: ManagerVersion | null,
+  major: number,
+  minor = 0
+): boolean => {
+  if (version === null) {
+    return true;
+  }
+  if (version.major !== major) {
+    return version.major > major;
+  }
+  return version.minor >= minor;
+};
+
+const lockfilePresent = (
+  manager: DetectedManager,
+  readFile: ReadFile,
+  fallback: string
+): boolean => {
+  const path = manager.lockfilePath ?? fallback;
+  return readFile(path) !== null;
+};
+
+const auditMeetsGate = (
+  auditEnabled: boolean,
+  auditLevel: unknown,
+  gate: string
+): boolean => {
+  if (auditEnabled) {
+    return true;
+  }
+  const level = typeof auditLevel === "string" ? auditLevel.toLowerCase() : "";
+  const have = AUDIT_RANK[level];
+  const need = AUDIT_RANK[gate] ?? AUDIT_RANK.high;
+  return have !== undefined && need !== undefined && have <= need;
+};
+
+const packageManagerStartsWith = (
+  raw: string | null,
+  prefix: string
+): boolean => {
+  if (raw === null) {
+    return false;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isPlainObject(parsed)) {
+      return false;
+    }
+    return (
+      typeof parsed.packageManager === "string" &&
+      parsed.packageManager.startsWith(prefix)
+    );
+  } catch {
+    return false;
+  }
+};
+
+const packageManagerYarnBerry = (raw: string | null): boolean => {
+  if (raw === null) {
+    return false;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isPlainObject(parsed)) {
+      return false;
+    }
+    const field = parsed.packageManager;
+    if (typeof field !== "string") {
+      return false;
+    }
+    const match = YARN_BERRY_PATTERN.exec(field);
+    if (match?.groups === undefined) {
+      return false;
+    }
+    return Number(match.groups["major"]) >= 2;
+  } catch {
+    return false;
+  }
+};
+
+/** npm 12 defaults allow-git and allow-remote to "none". */
+const npmrcAllowsNonRegistry = (npmrc: Record<string, string>): boolean =>
+  npmrc["allow-git"] === "all" || npmrc["allow-remote"] === "all";
+
+const pnpmRegistryPinned = (yaml: Record<string, unknown>): boolean => {
+  if (hasText(yaml["registry"])) {
+    return true;
+  }
+  const { registries } = yaml;
+  if (!isPlainObject(registries)) {
+    return false;
+  }
+  return hasText(registries["default"]);
+};
+
+const bareMinutesToHours = (trimmed: string): number | null => {
+  const bare = parseNumber(trimmed);
+  return bare === null ? null : bare / 60;
+};
+
+const unitToHours = (amount: number, unit: string): number => {
+  if (unit.startsWith("w")) {
+    return amount * 24 * 7;
+  }
+  if (unit.startsWith("d")) {
+    return amount * 24;
+  }
+  if (unit.startsWith("m")) {
+    return amount / 60;
+  }
+  return amount;
+};
+
+const parsePnpmAgeHours = (value: unknown): number | null => {
+  // pnpm treats bare minimumReleaseAge numbers as MINUTES.
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value / 60;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim().toLowerCase();
+  const match = AGE_UNIT_PATTERN.exec(trimmed);
+  if (match?.groups === undefined) {
+    return bareMinutesToHours(trimmed);
+  }
+  const amount = Number(match.groups["amount"]);
+  if (!Number.isFinite(amount)) {
+    return null;
+  }
+  return unitToHours(amount, match.groups["unit"] ?? "m");
+};
+
+const yarnAuditDisabled = (yarnrc: Record<string, unknown>): boolean =>
+  [yarnrc["audit"], yarnrc["npmAudit"], yarnrc["enableNpmAudit"]].includes(
+    false
+  );
+
+const bunAutoAllowsScripts = (auto: unknown): boolean => {
+  if (auto === true) {
+    return true;
+  }
+  if (typeof auto !== "string") {
+    return false;
+  }
+  return BUN_AUTO_SCRIPT_VALUES.has(auto.trim().toLowerCase());
+};
+
+const bunDenyScripts = (
+  bunfig: Record<string, unknown>,
+  install: Record<string, unknown>
+): boolean =>
+  [
+    bunfig["ignoreScripts"],
+    install["ignoreScripts"],
+    bunfig["ignore-scripts"],
+    install["ignore-scripts"],
+  ].includes(true);
+
+const bunHasTrusted = (
+  bunfig: Record<string, unknown>,
+  install: Record<string, unknown>
+): boolean =>
+  bunfig["trustedDependencies"] !== undefined ||
+  install["trustedDependencies"] !== undefined;
+
+const bunScriptsUnrestricted = (
+  bunfig: Record<string, unknown>,
+  install: Record<string, unknown>
+): boolean => {
+  if (bunAutoAllowsScripts(install["auto"])) {
+    return true;
+  }
+  const hasSecurity = isPlainObject(install["security"]);
+  return (
+    !bunHasTrusted(bunfig, install) &&
+    !hasSecurity &&
+    !bunDenyScripts(bunfig, install)
+  );
+};
+
+const bunRegistryPinned = (install: Record<string, unknown>): boolean => {
+  const { registry } = install;
+  if (hasText(registry)) {
+    return true;
+  }
+  return isPlainObject(registry) && hasText(registry["url"]);
+};
+
+const bunLockfilePresent = (
+  project: Project,
+  manager: DetectedManager,
+  readFile: ReadFile
+): boolean => {
+  if (
+    manager.lockfilePath !== null &&
+    readFile(manager.lockfilePath) !== null
+  ) {
+    return true;
+  }
+  return (
+    readFile(`${project.root}/bun.lock`) !== null ||
+    readFile(`${project.root}/bun.lockb`) !== null
+  );
+};
+
+const readUvConfig = (
+  project: Project,
+  readFile: ReadFile
+): Record<string, unknown> => {
   const pyproject = parseToml(readFile(`${project.root}/pyproject.toml`) ?? "");
   const tool = isPlainObject(pyproject["tool"]) ? pyproject["tool"] : {};
   const toolUv = isPlainObject(tool["uv"]) ? tool["uv"] : {};
   const uvToml = parseToml(readFile(`${project.root}/uv.toml`) ?? "");
   return { ...toolUv, ...uvToml };
-}
+};
 
-function uvExcludeNewerMeets(value: unknown, minDays: number): boolean {
-  if (typeof value === "number" && Number.isFinite(value)) return value >= minDays;
-  if (typeof value !== "string") return false;
-  const trimmed = value.trim();
-  if (trimmed === "") return false;
+/** Returns null when the value is not a timestamp and other parses apply. */
+const uvDateMeets = (trimmed: string, minDays: number): boolean | null => {
+  if (!/[tT-]/u.test(trimmed)) {
+    return null;
+  }
+  const ts = Date.parse(trimmed);
+  if (Number.isNaN(ts)) {
+    return null;
+  }
+  return Date.now() - ts >= minDays * 86_400_000;
+};
+
+const uvExcludeNewerStringMeets = (
+  trimmed: string,
+  minDays: number
+): boolean => {
+  if (trimmed === "") {
+    return false;
+  }
   const asNumber = Number(trimmed);
-  if (Number.isFinite(asNumber) && trimmed === String(asNumber)) return asNumber >= minDays;
-  if (/[tT-]/.test(trimmed)) {
-    const ts = Date.parse(trimmed);
-    if (!Number.isNaN(ts)) return Date.now() - ts >= minDays * 86_400_000;
+  if (Number.isFinite(asNumber) && trimmed === String(asNumber)) {
+    return asNumber >= minDays;
+  }
+  const dateMeets = uvDateMeets(trimmed, minDays);
+  if (dateMeets !== null) {
+    return dateMeets;
   }
   const hours = parsePnpmAgeHours(trimmed);
   return hours !== null && hours / 24 >= minDays;
-}
+};
 
-function uvHasExtraIndexes(cfg: Record<string, unknown>): boolean {
-  const extra = cfg["extra-index-url"];
-  if (typeof extra === "string" && extra.trim() !== "") return true;
-  if (Array.isArray(extra) && extra.length > 0) return true;
-  const index = cfg["index"];
-  if (!Array.isArray(index)) return false;
-  if (index.length > 1) return true;
-  return index.some((entry) => isPlainObject(entry) && entry["default"] !== true);
-}
-
-function defaultReadFile(path: string): string | null {
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return null;
+const uvExcludeNewerMeets = (value: unknown, minDays: number): boolean => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value >= minDays;
   }
-}
+  if (typeof value !== "string") {
+    return false;
+  }
+  return uvExcludeNewerStringMeets(value.trim(), minDays);
+};
+
+const hasExtraIndexUrl = (extra: unknown): boolean => {
+  if (typeof extra === "string") {
+    return extra.trim() !== "";
+  }
+  return Array.isArray(extra) && extra.length > 0;
+};
+
+const uvIndexIsExtra = (entry: unknown): boolean =>
+  isPlainObject(entry) && entry["default"] !== true;
+
+const uvIndexListExtra = (index: unknown): boolean => {
+  if (!Array.isArray(index)) {
+    return false;
+  }
+  return index.length > 1 || index.some(uvIndexIsExtra);
+};
+
+const uvHasExtraIndexes = (cfg: Record<string, unknown>): boolean =>
+  hasExtraIndexUrl(cfg["extra-index-url"]) || uvIndexListExtra(cfg["index"]);
+
+const lockfileMissingFinding = (
+  required: boolean,
+  present: boolean,
+  path: string,
+  message: string,
+  manager: PackageManager
+): Finding[] =>
+  required && !present
+    ? [setting("lockfile.missing", message, "high", path, manager)]
+    : [];
+
+const pmPinFinding = (
+  required: boolean,
+  pinned: boolean,
+  message: string,
+  preset: PresetName,
+  path: string,
+  manager: PackageManager
+): Finding[] =>
+  required && !pinned
+    ? [setting("pm.unpinned", message, pinSeverity(preset), path, manager)]
+    : [];
+
+const registryUnpinnedFinding = (
+  pinned: boolean,
+  message: string,
+  preset: PresetName,
+  path: string,
+  manager: PackageManager
+): Finding[] =>
+  pinned
+    ? []
+    : [
+        setting(
+          "registry.unpinned",
+          message,
+          pinSeverity(preset),
+          path,
+          manager
+        ),
+      ];
+
+const blanketExcludeFinding = (
+  value: unknown,
+  message: string,
+  path: string,
+  manager: PackageManager
+): Finding[] =>
+  isBlanketExclude(value)
+    ? [setting("min-age.exclude-all", message, "high", path, manager)]
+    : [];
+
+// An enforced package.json allowScripts policy is a valid, more precise
+// alternative to blanket ignore-scripts. It is only enforced once
+// strict-allow-scripts is on; until then npm 11 merely warns.
+const npmScriptEnforcementFinding = (
+  settings: ResolvedSettings,
+  scriptsIgnored: boolean,
+  allowScripts: boolean,
+  strictAllowScripts: boolean,
+  npmrcPath: string
+): Finding[] => {
+  if (
+    settings.ignoreScripts &&
+    !scriptsIgnored &&
+    !(allowScripts && strictAllowScripts)
+  ) {
+    return [
+      setting(
+        "scripts.unrestricted",
+        "npm ignore-scripts must be true, or allowScripts with strict-allow-scripts",
+        "high",
+        npmrcPath,
+        "npm"
+      ),
+    ];
+  }
+  return [];
+};
+
+const npmScriptAdviceFindings = (
+  settings: ResolvedSettings,
+  scriptsIgnored: boolean,
+  allowScripts: boolean,
+  strictAllowScripts: boolean,
+  npmrcPath: string
+): Finding[] => {
+  const findings: Finding[] = [];
+  if (settings.ignoreScripts && allowScripts && !strictAllowScripts) {
+    findings.push(
+      advice(
+        "scripts.allowlist-advisory",
+        "allowScripts is advisory until strict-allow-scripts=true (npm 12 default)",
+        npmrcPath,
+        "npm"
+      )
+    );
+  }
+  // npm/cli#9450: ignore-scripts hides the allowScripts tooling entirely.
+  if (scriptsIgnored && allowScripts) {
+    findings.push(
+      advice(
+        "scripts.allowlist-masked",
+        "ignore-scripts=true masks the package.json allowScripts policy",
+        npmrcPath,
+        "npm"
+      )
+    );
+  }
+  return findings;
+};
+
+const npmScriptsFindings = (
+  settings: ResolvedSettings,
+  npmrc: Record<string, string>,
+  manifestRaw: string | null,
+  npmrcPath: string
+): Finding[] => {
+  const scriptsIgnored = npmrc["ignore-scripts"] === "true";
+  const allowScripts = isPlainObject(
+    manifestField(manifestRaw, "allowScripts")
+  );
+  const strictAllowScripts = npmrc["strict-allow-scripts"] === "true";
+  return [
+    ...npmScriptEnforcementFinding(
+      settings,
+      scriptsIgnored,
+      allowScripts,
+      strictAllowScripts,
+      npmrcPath
+    ),
+    ...npmScriptAdviceFindings(
+      settings,
+      scriptsIgnored,
+      allowScripts,
+      strictAllowScripts,
+      npmrcPath
+    ),
+  ];
+};
+
+const npmSourceFinding = (
+  settings: ResolvedSettings,
+  npmrc: Record<string, string>,
+  npmrcPath: string
+): Finding[] => {
+  if (settings.ignoreScripts && npmrcAllowsNonRegistry(npmrc)) {
+    return [
+      setting(
+        "source.non-registry",
+        "allow-git and allow-remote must not be set to all",
+        "high",
+        npmrcPath,
+        "npm"
+      ),
+    ];
+  }
+  return [];
+};
+
+const npmAuditFinding = (
+  npmrc: Record<string, string>,
+  settings: ResolvedSettings,
+  npmrcPath: string
+): Finding[] => {
+  if (
+    auditMeetsGate(
+      npmrc["audit"] === "true",
+      npmrc["audit-level"],
+      settings.auditLevel
+    )
+  ) {
+    return [];
+  }
+  return [
+    setting(
+      "audit.disabled",
+      "npm audit must be enabled at the preset gate",
+      "high",
+      npmrcPath,
+      "npm"
+    ),
+  ];
+};
+
+const npmMinAgeFinding = (
+  settings: ResolvedSettings,
+  npmrc: Record<string, string>,
+  npmrcPath: string
+): Finding[] => {
+  if (settings.minReleaseAgeDays <= 0) {
+    return [];
+  }
+  const days = parseNumber(npmrc["min-release-age"]);
+  if (days !== null && days >= settings.minReleaseAgeDays) {
+    return [];
+  }
+  return [
+    setting(
+      "min-age.disabled",
+      `min-release-age must be at least ${settings.minReleaseAgeDays} days`,
+      "high",
+      npmrcPath,
+      "npm"
+    ),
+  ];
+};
+
+const auditNpm: ManagerAuditor = (project, manager, policy, readFile) => {
+  const settings = resolveSettings(policy, "npm");
+  const npmrcPath = manager.configPath ?? `${project.root}/.npmrc`;
+  const npmrc = parseNpmrc(readFile(npmrcPath) ?? "");
+  const manifestRaw = readFile(manager.manifestPath);
+  return [
+    ...npmScriptsFindings(settings, npmrc, manifestRaw, npmrcPath),
+    ...npmSourceFinding(settings, npmrc, npmrcPath),
+    ...lockfileMissingFinding(
+      settings.requireLockfile,
+      lockfilePresent(manager, readFile, `${project.root}/package-lock.json`),
+      manager.lockfilePath ?? `${project.root}/package-lock.json`,
+      "package-lock.json is required",
+      "npm"
+    ),
+    ...npmAuditFinding(npmrc, settings, npmrcPath),
+    ...npmMinAgeFinding(settings, npmrc, npmrcPath),
+    ...registryUnpinnedFinding(
+      hasText(npmrc["registry"]),
+      "registry must be set in .npmrc",
+      policy.preset,
+      npmrcPath,
+      "npm"
+    ),
+    ...pmPinFinding(
+      settings.requirePmPin,
+      packageManagerStartsWith(manifestRaw, "npm@"),
+      "package.json packageManager must start with npm@",
+      policy.preset,
+      manager.manifestPath,
+      "npm"
+    ),
+  ];
+};
+
+const pnpmDefaultBuildsFinding = (
+  preset: PresetName,
+  yamlPath: string,
+  buildsBlockedByDefault: boolean
+): Finding =>
+  buildsBlockedByDefault
+    ? advice(
+        "scripts.unrestricted",
+        "pnpm blocks dependency builds by default; declare allowBuilds to review them explicitly",
+        yamlPath,
+        "pnpm",
+        defaultRelianceSeverity(preset),
+        true
+      )
+    : setting(
+        "scripts.unrestricted",
+        "pnpm builds must be restricted",
+        "high",
+        yamlPath,
+        "pnpm"
+      );
+
+const pnpmBuildsFindings = (
+  yaml: Record<string, unknown>,
+  yamlPath: string,
+  policy: Policy,
+  usesAllowBuilds: boolean,
+  buildsBlockedByDefault: boolean
+): Finding[] => {
+  const hasAllowBuilds = isPlainObject(yaml["allowBuilds"]);
+  const legacy = PNPM_LEGACY_BUILD_KEYS.filter(
+    (key) => yaml[key] !== undefined
+  );
+  if (yaml["dangerouslyAllowAllBuilds"] === true) {
+    return [
+      setting(
+        "scripts.unrestricted",
+        "pnpm dangerouslyAllowAllBuilds must not be true",
+        "high",
+        yamlPath,
+        "pnpm"
+      ),
+    ];
+  }
+  if (usesAllowBuilds && legacy.length > 0 && !hasAllowBuilds) {
+    return [
+      setting(
+        "scripts.legacy-config",
+        `pnpm 11 removed ${legacy.join(", ")}; use allowBuilds instead`,
+        "high",
+        yamlPath,
+        "pnpm"
+      ),
+    ];
+  }
+  if (!hasAllowBuilds && legacy.length === 0) {
+    return [
+      pnpmDefaultBuildsFinding(policy.preset, yamlPath, buildsBlockedByDefault),
+    ];
+  }
+  return [];
+};
+
+const pnpmScriptsFindings = (
+  settings: ResolvedSettings,
+  yaml: Record<string, unknown>,
+  yamlPath: string,
+  policy: Policy,
+  usesAllowBuilds: boolean,
+  buildsBlockedByDefault: boolean
+): Finding[] => {
+  if (!settings.ignoreScripts) {
+    return [];
+  }
+  const findings = pnpmBuildsFindings(
+    yaml,
+    yamlPath,
+    policy,
+    usesAllowBuilds,
+    buildsBlockedByDefault
+  );
+  if (yaml["strictDepBuilds"] === false) {
+    findings.push(
+      setting(
+        "scripts.non-strict",
+        "pnpm strictDepBuilds must not be false",
+        "high",
+        yamlPath,
+        "pnpm"
+      )
+    );
+  }
+  return findings;
+};
+
+const pnpmExoticFinding = (
+  yaml: Record<string, unknown>,
+  yamlPath: string
+): Finding[] => {
+  if (yaml["blockExoticSubdeps"] === false) {
+    return [
+      setting(
+        "source.non-registry",
+        "pnpm blockExoticSubdeps must not be false",
+        "high",
+        yamlPath,
+        "pnpm"
+      ),
+    ];
+  }
+  return [];
+};
+
+const pnpmAuditFinding = (
+  yaml: Record<string, unknown>,
+  settings: ResolvedSettings,
+  yamlPath: string
+): Finding[] => {
+  if (
+    auditMeetsGate(
+      isTruthy(yaml["audit"]),
+      yaml["auditLevel"] ?? yaml["audit-level"],
+      settings.auditLevel
+    )
+  ) {
+    return [];
+  }
+  return [
+    setting(
+      "audit.disabled",
+      "pnpm audit must be enabled at the preset gate",
+      "high",
+      yamlPath,
+      "pnpm"
+    ),
+  ];
+};
+
+const pnpmMinAgeGateFinding = (
+  settings: ResolvedSettings,
+  yaml: Record<string, unknown>,
+  yamlPath: string,
+  usesAllowBuilds: boolean
+): Finding[] => {
+  const raw = yaml["minimumReleaseAge"];
+  // pnpm 11 ships minimumReleaseAge=1440 (24h) on by default.
+  const defaultHours = usesAllowBuilds ? 24 : 0;
+  const hours = raw === undefined ? defaultHours : parsePnpmAgeHours(raw);
+  const requiredHours = settings.minReleaseAgeDays * 24;
+  if (hours !== null && hours >= requiredHours) {
+    return [];
+  }
+  return [
+    setting(
+      "min-age.disabled",
+      `minimumReleaseAge must be at least ${requiredHours * 60} minutes`,
+      "high",
+      yamlPath,
+      "pnpm"
+    ),
+  ];
+};
+
+// minimumReleaseAgeStrict defaults to true only when the gate is set
+// explicitly; false lets pnpm fall back to a version that fails the gate.
+const pnpmMinAgeStrictFinding = (
+  yaml: Record<string, unknown>,
+  yamlPath: string
+): Finding[] => {
+  if (yaml["minimumReleaseAgeStrict"] === false) {
+    return [
+      setting(
+        "min-age.non-strict",
+        "pnpm minimumReleaseAgeStrict must not be false",
+        "high",
+        yamlPath,
+        "pnpm"
+      ),
+    ];
+  }
+  return [];
+};
+
+const pnpmMissingTimeFinding = (
+  policy: Policy,
+  yaml: Record<string, unknown>,
+  yamlPath: string
+): Finding[] => {
+  if (
+    policy.preset === "strict" &&
+    yaml["minimumReleaseAgeIgnoreMissingTime"] !== false
+  ) {
+    return [
+      setting(
+        "min-age.missing-time",
+        "minimumReleaseAgeIgnoreMissingTime must be false to fail closed",
+        "moderate",
+        yamlPath,
+        "pnpm"
+      ),
+    ];
+  }
+  return [];
+};
+
+const pnpmMinAgeFindings = (
+  settings: ResolvedSettings,
+  yaml: Record<string, unknown>,
+  yamlPath: string,
+  policy: Policy,
+  usesAllowBuilds: boolean
+): Finding[] => {
+  if (settings.minReleaseAgeDays <= 0) {
+    return [];
+  }
+  return [
+    ...pnpmMinAgeGateFinding(settings, yaml, yamlPath, usesAllowBuilds),
+    ...pnpmMinAgeStrictFinding(yaml, yamlPath),
+    ...blanketExcludeFinding(
+      yaml["minimumReleaseAgeExclude"],
+      "minimumReleaseAgeExclude must not exempt every package",
+      yamlPath,
+      "pnpm"
+    ),
+    ...pnpmMissingTimeFinding(policy, yaml, yamlPath),
+  ];
+};
+
+const auditPnpm: ManagerAuditor = (project, manager, policy, readFile) => {
+  const settings = resolveSettings(policy, "pnpm");
+  const yamlPath = manager.configPath ?? `${project.root}/pnpm-workspace.yaml`;
+  const yaml = parseYaml(readFile(yamlPath) ?? "");
+  const version = managerVersion(readFile(manager.manifestPath), "pnpm");
+  // pnpm >= 10 blocks dependency builds by default; pnpm >= 11 replaced the
+  // onlyBuiltDependencies family with a single allowBuilds map.
+  const buildsBlockedByDefault = atLeastOrUnknown(version, 10);
+  const usesAllowBuilds = atLeastOrUnknown(version, 11);
+  const lockfileOff = yaml["lockfile"] === false;
+  return [
+    ...pnpmScriptsFindings(
+      settings,
+      yaml,
+      yamlPath,
+      policy,
+      usesAllowBuilds,
+      buildsBlockedByDefault
+    ),
+    ...pnpmExoticFinding(yaml, yamlPath),
+    ...lockfileMissingFinding(
+      settings.requireLockfile,
+      !lockfileOff &&
+        lockfilePresent(manager, readFile, `${project.root}/pnpm-lock.yaml`),
+      manager.lockfilePath ?? `${project.root}/pnpm-lock.yaml`,
+      "pnpm-lock.yaml is required",
+      "pnpm"
+    ),
+    ...pnpmAuditFinding(yaml, settings, yamlPath),
+    ...pnpmMinAgeFindings(settings, yaml, yamlPath, policy, usesAllowBuilds),
+    ...registryUnpinnedFinding(
+      pnpmRegistryPinned(yaml),
+      "registry or registries.default must be set",
+      policy.preset,
+      yamlPath,
+      "pnpm"
+    ),
+    ...pmPinFinding(
+      settings.requirePmPin,
+      packageManagerStartsWith(readFile(manager.manifestPath), "pnpm@"),
+      "package.json packageManager must start with pnpm@",
+      policy.preset,
+      manager.manifestPath,
+      "pnpm"
+    ),
+  ];
+};
+
+const yarnScriptsFinding = (
+  settings: ResolvedSettings,
+  yarnrc: Record<string, unknown>,
+  yarnrcPath: string,
+  policy: Policy,
+  scriptsOffByDefault: boolean
+): Finding[] => {
+  if (!settings.ignoreScripts || yarnrc["enableScripts"] === false) {
+    return [];
+  }
+  if (yarnrc["enableScripts"] === true || !scriptsOffByDefault) {
+    return [
+      setting(
+        "scripts.unrestricted",
+        "yarn enableScripts must be false",
+        "high",
+        yarnrcPath,
+        "yarn"
+      ),
+    ];
+  }
+  return [
+    advice(
+      "scripts.unrestricted",
+      "yarn defaults enableScripts to false; set it explicitly to keep that guarantee",
+      yarnrcPath,
+      "yarn",
+      defaultRelianceSeverity(policy.preset),
+      true
+    ),
+  ];
+};
+
+const yarnMinAgeGateFinding = (
+  settings: ResolvedSettings,
+  yarnrc: Record<string, unknown>,
+  yarnrcPath: string,
+  ageGateByDefault: boolean
+): Finding[] => {
+  const raw = yarnrc["npmMinimalAgeGate"];
+  const defaultHours = ageGateByDefault ? 24 * 7 : 0;
+  const hours = raw === undefined ? defaultHours : parsePnpmAgeHours(raw);
+  const requiredHours = settings.minReleaseAgeDays * 24;
+  if (hours !== null && hours >= requiredHours) {
+    return [];
+  }
+  return [
+    setting(
+      "min-age.disabled",
+      `npmMinimalAgeGate must be at least ${requiredHours * 60} minutes`,
+      "high",
+      yarnrcPath,
+      "yarn"
+    ),
+  ];
+};
+
+const yarnMinAgeFindings = (
+  settings: ResolvedSettings,
+  yarnrc: Record<string, unknown>,
+  yarnrcPath: string,
+  ageGateByDefault: boolean
+): Finding[] => {
+  if (settings.minReleaseAgeDays <= 0) {
+    return [];
+  }
+  return [
+    ...yarnMinAgeGateFinding(settings, yarnrc, yarnrcPath, ageGateByDefault),
+    ...blanketExcludeFinding(
+      yarnrc["npmPreapprovedPackages"],
+      "npmPreapprovedPackages must not exempt every package",
+      yarnrcPath,
+      "yarn"
+    ),
+  ];
+};
+
+const yarnIntegrityFindings = (
+  yarnrc: Record<string, unknown>,
+  yarnrcPath: string
+): Finding[] => {
+  const findings: Finding[] = [];
+  if (
+    yarnrc["checksumBehavior"] !== undefined &&
+    yarnrc["checksumBehavior"] !== "throw"
+  ) {
+    findings.push(
+      setting(
+        "integrity.checksum-relaxed",
+        'yarn checksumBehavior must be "throw"',
+        "high",
+        yarnrcPath,
+        "yarn"
+      )
+    );
+  }
+  if (yarnrc["enableStrictSsl"] === false) {
+    findings.push(
+      setting(
+        "integrity.strict-ssl",
+        "yarn enableStrictSsl must not be false",
+        "high",
+        yarnrcPath,
+        "yarn"
+      )
+    );
+  }
+  if (yarnrc["enableHardenedMode"] === false) {
+    findings.push(
+      setting(
+        "integrity.hardened-mode",
+        "yarn enableHardenedMode must not be false",
+        "moderate",
+        yarnrcPath,
+        "yarn"
+      )
+    );
+  }
+  return findings;
+};
+
+const yarnAuditFinding = (
+  yarnrc: Record<string, unknown>,
+  yarnrcPath: string
+): Finding[] => {
+  if (yarnAuditDisabled(yarnrc)) {
+    return [
+      setting(
+        "audit.disabled",
+        "yarn audit must not be disabled",
+        "high",
+        yarnrcPath,
+        "yarn"
+      ),
+    ];
+  }
+  return [];
+};
+
+const auditYarn: ManagerAuditor = (project, manager, policy, readFile) => {
+  const settings = resolveSettings(policy, "yarn");
+  const yarnrcPath = manager.configPath ?? `${project.root}/.yarnrc.yml`;
+  const yarnrc = parseYaml(readFile(yarnrcPath) ?? "");
+  const version = managerVersion(readFile(manager.manifestPath), "yarn");
+  // Yarn stopped running dependency postinstalls by default in 4.14, and
+  // added npmMinimalAgeGate (default 1w) in 4.12.
+  const scriptsOffByDefault = atLeastOrUnknown(version, 4, 14);
+  const ageGateByDefault = atLeastOrUnknown(version, 4, 12);
+  return [
+    ...yarnScriptsFinding(
+      settings,
+      yarnrc,
+      yarnrcPath,
+      policy,
+      scriptsOffByDefault
+    ),
+    ...yarnMinAgeFindings(settings, yarnrc, yarnrcPath, ageGateByDefault),
+    ...yarnIntegrityFindings(yarnrc, yarnrcPath),
+    ...lockfileMissingFinding(
+      settings.requireLockfile,
+      lockfilePresent(manager, readFile, `${project.root}/yarn.lock`),
+      manager.lockfilePath ?? `${project.root}/yarn.lock`,
+      "yarn.lock is required",
+      "yarn"
+    ),
+    ...yarnAuditFinding(yarnrc, yarnrcPath),
+    ...registryUnpinnedFinding(
+      hasText(yarnrc["npmRegistryServer"]),
+      "npmRegistryServer must be set",
+      policy.preset,
+      yarnrcPath,
+      "yarn"
+    ),
+    ...pmPinFinding(
+      settings.requirePmPin,
+      packageManagerYarnBerry(readFile(manager.manifestPath)),
+      "package.json packageManager must be yarn@ major >= 2",
+      policy.preset,
+      manager.manifestPath,
+      "yarn"
+    ),
+  ];
+};
+
+const bunScriptsFinding = (
+  settings: ResolvedSettings,
+  bunfig: Record<string, unknown>,
+  install: Record<string, unknown>,
+  bunfigPath: string
+): Finding[] => {
+  if (settings.ignoreScripts && bunScriptsUnrestricted(bunfig, install)) {
+    return [
+      setting(
+        "scripts.unrestricted",
+        "bun scripts must be restricted",
+        "high",
+        bunfigPath,
+        "bun"
+      ),
+    ];
+  }
+  return [];
+};
+
+const bunMinAgeGateFinding = (
+  settings: ResolvedSettings,
+  install: Record<string, unknown>,
+  bunfigPath: string
+): Finding[] => {
+  // bun expresses minimumReleaseAge in SECONDS and ships it off by default.
+  const seconds = parseNumber(install["minimumReleaseAge"]);
+  const requiredSeconds = settings.minReleaseAgeDays * 86_400;
+  if (seconds !== null && seconds >= requiredSeconds) {
+    return [];
+  }
+  return [
+    setting(
+      "min-age.disabled",
+      `install.minimumReleaseAge must be at least ${requiredSeconds} seconds`,
+      "high",
+      bunfigPath,
+      "bun"
+    ),
+  ];
+};
+
+const bunMinAgeFindings = (
+  settings: ResolvedSettings,
+  install: Record<string, unknown>,
+  bunfigPath: string
+): Finding[] => {
+  if (settings.minReleaseAgeDays <= 0) {
+    return [];
+  }
+  return [
+    ...bunMinAgeGateFinding(settings, install, bunfigPath),
+    ...blanketExcludeFinding(
+      install["minimumReleaseAgeExcludes"],
+      "minimumReleaseAgeExcludes must not exempt every package",
+      bunfigPath,
+      "bun"
+    ),
+  ];
+};
+
+const auditBun: ManagerAuditor = (project, manager, policy, readFile) => {
+  const settings = resolveSettings(policy, "bun");
+  const bunfigPath = manager.configPath ?? `${project.root}/bunfig.toml`;
+  const bunfig = parseToml(readFile(bunfigPath) ?? "");
+  const install = isPlainObject(bunfig["install"]) ? bunfig["install"] : {};
+  return [
+    ...bunScriptsFinding(settings, bunfig, install, bunfigPath),
+    ...lockfileMissingFinding(
+      settings.requireLockfile,
+      bunLockfilePresent(project, manager, readFile),
+      manager.lockfilePath ?? `${project.root}/bun.lock`,
+      "bun.lock or bun.lockb is required",
+      "bun"
+    ),
+    ...bunMinAgeFindings(settings, install, bunfigPath),
+    ...registryUnpinnedFinding(
+      bunRegistryPinned(install),
+      "install.registry must be set",
+      policy.preset,
+      bunfigPath,
+      "bun"
+    ),
+  ];
+};
+
+const uvExcludeNewerFinding = (
+  settings: ResolvedSettings,
+  cfg: Record<string, unknown>,
+  configPath: string
+): Finding[] => {
+  if (uvExcludeNewerMeets(cfg["exclude-newer"], settings.minReleaseAgeDays)) {
+    return [];
+  }
+  return [
+    setting(
+      "min-age.disabled",
+      `exclude-newer must meet ${settings.minReleaseAgeDays} days`,
+      "high",
+      configPath,
+      "uv"
+    ),
+  ];
+};
+
+const uvMinAgeFindings = (
+  settings: ResolvedSettings,
+  cfg: Record<string, unknown>,
+  configPath: string
+): Finding[] => {
+  if (settings.minReleaseAgeDays <= 0) {
+    return [];
+  }
+  return [
+    ...uvExcludeNewerFinding(settings, cfg, configPath),
+    ...blanketExcludeFinding(
+      cfg["exclude-newer-package"],
+      "exclude-newer-package must not exempt every package",
+      configPath,
+      "uv"
+    ),
+  ];
+};
+
+const uvIndexStrategyFinding = (
+  policy: Policy,
+  cfg: Record<string, unknown>,
+  configPath: string
+): Finding[] => {
+  if (
+    policy.preset === "strict" &&
+    uvHasExtraIndexes(cfg) &&
+    cfg["index-strategy"] !== "first-index"
+  ) {
+    return [
+      setting(
+        "registry.unpinned",
+        'extra indexes require index-strategy = "first-index"',
+        pinSeverity(policy.preset),
+        configPath,
+        "uv"
+      ),
+    ];
+  }
+  return [];
+};
+
+const auditUv: ManagerAuditor = (project, manager, policy, readFile) => {
+  const settings = resolveSettings(policy, "uv");
+  const cfg = readUvConfig(project, readFile);
+  const configPath = manager.configPath ?? `${project.root}/pyproject.toml`;
+  return [
+    ...lockfileMissingFinding(
+      settings.requireLockfile,
+      lockfilePresent(manager, readFile, `${project.root}/uv.lock`),
+      manager.lockfilePath ?? `${project.root}/uv.lock`,
+      "uv.lock is required",
+      "uv"
+    ),
+    ...uvMinAgeFindings(settings, cfg, configPath),
+    ...uvIndexStrategyFinding(policy, cfg, configPath),
+  ];
+};
+
+const AUDITORS: Partial<Record<PackageManager, ManagerAuditor>> = {
+  bun: auditBun,
+  npm: auditNpm,
+  pnpm: auditPnpm,
+  uv: auditUv,
+  yarn: auditYarn,
+};
+
+const roleFinding = (manager: DetectedManager): Finding | null => {
+  if (manager.role === "leftover") {
+    return leftoverFinding(manager);
+  }
+  if (manager.role === "unsupported") {
+    return unsupportedFinding(manager);
+  }
+  return null;
+};
+
+const primaryFindings = (
+  project: Project,
+  manager: DetectedManager,
+  policy: Policy,
+  readFile: ReadFile
+): Finding[] => {
+  if (PYTHON_LEGACY_MANAGERS.has(manager.name)) {
+    return [notUsingUvFinding(manager)];
+  }
+  if (!policy.enabledManagers.includes(manager.name)) {
+    return [];
+  }
+  const auditor = AUDITORS[manager.name];
+  return auditor === undefined
+    ? []
+    : auditor(project, manager, policy, readFile);
+};
+
+const managerFindings = (
+  project: Project,
+  manager: DetectedManager,
+  policy: Policy,
+  readFile: ReadFile
+): Finding[] => {
+  const role = roleFinding(manager);
+  if (role !== null) {
+    return [role];
+  }
+  if (manager.role !== "primary") {
+    return [];
+  }
+  return primaryFindings(project, manager, policy, readFile);
+};
+
+export const auditSettings = (
+  project: Project,
+  policy: Policy,
+  opts?: SettingsFs
+): Finding[] => {
+  const readFile = opts?.readFile ?? defaultReadFile;
+  return project.managers.flatMap((manager) =>
+    managerFindings(project, manager, policy, readFile)
+  );
+};

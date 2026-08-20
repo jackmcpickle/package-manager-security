@@ -49,6 +49,31 @@ Exit code `0` means every project passed. `1` means a policy failure, either set
 
 Configuration lives in `~/.config/pmsec/config.toml`, plus `.pmsec.toml` at the scan root or in any repo. The closer file wins, and flags win over files.
 
+## What it checks
+
+Every manager gets the same four questions: are install scripts restricted, is
+there a release-age gate, is the lockfile present, and is the registry pinned.
+The settings behind those answers differ per manager:
+
+| | install scripts | release-age gate |
+|---|---|---|
+| npm | `ignore-scripts`, or `allowScripts` + `strict-allow-scripts` | `min-release-age` (days) |
+| pnpm | `allowBuilds`, `dangerouslyAllowAllBuilds`, `strictDepBuilds` | `minimumReleaseAge` (minutes) |
+| yarn | `enableScripts` | `npmMinimalAgeGate` (minutes or `7d`) |
+| bun | `trustedDependencies` | `minimumReleaseAge` (seconds) |
+| uv | n/a | `exclude-newer` (date or `"7 days"`) |
+
+Also checked: pnpm `blockExoticSubdeps`, npm `allow-git` / `allow-remote`, yarn
+`checksumBehavior`, `enableStrictSsl` and `enableHardenedMode`, and exclude
+lists (`minimumReleaseAgeExclude`, `npmPreapprovedPackages`,
+`exclude-newer-package`) that use a bare `*` and so void the gate.
+
+Checks are version-aware. pnpm 11 turns `minimumReleaseAge` on at 1440 minutes
+and yarn defaults `npmMinimalAgeGate` to `1w` and `enableScripts` to `false`, so
+a missing key on those versions is reported as `info` ("you're relying on a safe
+default") rather than `high`. pmsec reads the version from the `packageManager`
+field in `package.json`; with no pin it assumes a current release.
+
 ## Development
 
 Requires [Bun](https://bun.sh) >= 1.2.

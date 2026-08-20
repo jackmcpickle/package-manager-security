@@ -1,61 +1,63 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import path from "node:path";
+
 import { auditAdvisories } from "../src/advisories";
 import { createFsCache } from "../src/cache";
 import type { Project } from "../src/domain";
 import { loadPolicy } from "../src/policy";
 
-const cacheDir1 = mkdtempSync(join(tmpdir(), "pmsec-test-cache-"));
-const cacheDir2 = mkdtempSync(join(tmpdir(), "pmsec-test-cache2-"));
-const cacheDir3 = mkdtempSync(join(tmpdir(), "pmsec-test-cache3-"));
-const cacheDir4 = mkdtempSync(join(tmpdir(), "pmsec-test-cache4-"));
-const cacheDir5 = mkdtempSync(join(tmpdir(), "pmsec-test-cache5-"));
-const cacheDir6 = mkdtempSync(join(tmpdir(), "pmsec-test-cache6-"));
-const cacheDir7 = mkdtempSync(join(tmpdir(), "pmsec-test-cache7-"));
-const cacheDir8 = mkdtempSync(join(tmpdir(), "pmsec-test-cache8-"));
+const cacheDir1 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache-"));
+const cacheDir2 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache2-"));
+const cacheDir3 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache3-"));
+const cacheDir4 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache4-"));
+const cacheDir5 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache5-"));
+const cacheDir6 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache6-"));
+const cacheDir7 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache7-"));
+const cacheDir8 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache8-"));
+const digest = (bytes: string) => `d:${bytes}`;
 
 afterAll(() => {
-  rmSync(cacheDir1, { recursive: true, force: true });
-  rmSync(cacheDir2, { recursive: true, force: true });
-  rmSync(cacheDir3, { recursive: true, force: true });
-  rmSync(cacheDir4, { recursive: true, force: true });
-  rmSync(cacheDir5, { recursive: true, force: true });
-  rmSync(cacheDir6, { recursive: true, force: true });
-  rmSync(cacheDir7, { recursive: true, force: true });
-  rmSync(cacheDir8, { recursive: true, force: true });
+  rmSync(cacheDir1, { force: true, recursive: true });
+  rmSync(cacheDir2, { force: true, recursive: true });
+  rmSync(cacheDir3, { force: true, recursive: true });
+  rmSync(cacheDir4, { force: true, recursive: true });
+  rmSync(cacheDir5, { force: true, recursive: true });
+  rmSync(cacheDir6, { force: true, recursive: true });
+  rmSync(cacheDir7, { force: true, recursive: true });
+  rmSync(cacheDir8, { force: true, recursive: true });
 });
 
 const project: Project = {
-  root: "/p",
   gitRoot: "/p",
   managers: [
     {
+      configPath: "/p/pnpm-workspace.yaml",
+      lockfilePath: "/p/pnpm-lock.yaml",
+      manifestPath: "/p/package.json",
       name: "pnpm",
       role: "primary",
-      manifestPath: "/p/package.json",
-      lockfilePath: "/p/pnpm-lock.yaml",
-      configPath: "/p/pnpm-workspace.yaml",
     },
   ],
+  root: "/p",
 };
 
 test("identical lockfile digest within TTL skips the live runner", async () => {
   const calls: string[][] = [];
-  const cache = createFsCache(cacheDir1, () => 1_000, 86_400_000);
+  const cache = createFsCache(cacheDir1, () => 1000, 86_400_000);
   const deps = {
     cache,
-    now: () => 1_000,
     digest: () => "abc",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async (argv: string[]) => {
+    run: (argv: string[]) => {
       calls.push(argv);
-      return { code: 0, stdout: `{"advisories":{}}`, stderr: "" };
+      return { code: 0, stderr: "", stdout: `{"advisories":{}}` };
     },
   };
   await auditAdvisories(project, loadPolicy({}), deps);
-  deps.now = () => 2_000;
+  deps.now = () => 2000;
   const second = await auditAdvisories(project, loadPolicy({}), deps);
   expect(second.fromCache).toBe(true);
   expect(second.ranLive).toBe(false);
@@ -64,26 +66,32 @@ test("identical lockfile digest within TTL skips the live runner", async () => {
 
 test("digest cache hit still runs live audit when refresh or noCache is set", async () => {
   const calls: string[][] = [];
-  const cache = createFsCache(cacheDir6, () => 1_000, 86_400_000);
+  const cache = createFsCache(cacheDir6, () => 1000, 86_400_000);
   const deps = {
     cache,
-    now: () => 1_000,
     digest: () => "abc",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async (argv: string[]) => {
+    run: (argv: string[]) => {
       calls.push(argv);
-      return { code: 0, stdout: `{"advisories":{}}`, stderr: "" };
+      return { code: 0, stderr: "", stdout: `{"advisories":{}}` };
     },
   };
   await auditAdvisories(project, loadPolicy({}), deps);
   expect(calls).toHaveLength(1);
 
-  const refreshed = await auditAdvisories(project, loadPolicy({}), { ...deps, refresh: true });
+  const refreshed = await auditAdvisories(project, loadPolicy({}), {
+    ...deps,
+    refresh: true,
+  });
   expect(refreshed.ranLive).toBe(true);
   expect(refreshed.fromCache).toBe(false);
   expect(calls).toHaveLength(2);
 
-  const uncached = await auditAdvisories(project, loadPolicy({}), { ...deps, noCache: true });
+  const uncached = await auditAdvisories(project, loadPolicy({}), {
+    ...deps,
+    noCache: true,
+  });
   expect(uncached.ranLive).toBe(true);
   expect(uncached.fromCache).toBe(false);
   expect(calls).toHaveLength(3);
@@ -91,15 +99,15 @@ test("digest cache hit still runs live audit when refresh or noCache is set", as
 
 test("noCache skips writing the lockfile digest cache", async () => {
   const calls: string[][] = [];
-  const cache = createFsCache(cacheDir7, () => 1_000, 86_400_000);
+  const cache = createFsCache(cacheDir7, () => 1000, 86_400_000);
   const deps = {
     cache,
-    now: () => 1_000,
     digest: () => "no-cache-digest",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async (argv: string[]) => {
+    run: (argv: string[]) => {
       calls.push(argv);
-      return { code: 0, stdout: `{"advisories":{}}`, stderr: "" };
+      return { code: 0, stderr: "", stdout: `{"advisories":{}}` };
     },
   };
   await auditAdvisories(project, loadPolicy({}), { ...deps, noCache: true });
@@ -112,17 +120,19 @@ test("noCache skips writing the lockfile digest cache", async () => {
 
 test("package@version cache hit still runs live audit", async () => {
   const calls: string[][] = [];
-  const cache = createFsCache(cacheDir2, () => 1_000, 86_400_000);
-  cache.putPackage("left-pad", "1.0.0", [{ name: "left-pad", version: "1.0.0", severity: "high", id: "GHSA-x" }]);
+  const cache = createFsCache(cacheDir2, () => 1000, 86_400_000);
+  cache.putPackage("left-pad", "1.0.0", [
+    { id: "GHSA-x", name: "left-pad", severity: "high", version: "1.0.0" },
+  ]);
   // project lockfile digest unique
   const result = await auditAdvisories(project, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest: () => "unique-digest",
+    now: () => 1000,
     readFile: () => "other-lock",
-    run: async (argv) => {
+    run: (argv) => {
       calls.push(argv);
-      return { code: 0, stdout: `{"advisories":{}}`, stderr: "" };
+      return { code: 0, stderr: "", stdout: `{"advisories":{}}` };
     },
   });
   expect(result.ranLive).toBe(true);
@@ -131,52 +141,51 @@ test("package@version cache hit still runs live audit", async () => {
 
 test("lockless projects do not share a digest cache hit", async () => {
   const calls: string[][] = [];
-  const cache = createFsCache(cacheDir3, () => 1_000, 86_400_000);
+  const cache = createFsCache(cacheDir3, () => 1000, 86_400_000);
   const locklessPnpm: Project = {
-    root: "/a",
     gitRoot: "/a",
     managers: [
       {
+        configPath: null,
+        lockfilePath: null,
+        manifestPath: "/a/package.json",
         name: "pnpm",
         role: "primary",
-        manifestPath: "/a/package.json",
-        lockfilePath: null,
-        configPath: null,
       },
     ],
+    root: "/a",
   };
   const unreadNpm: Project = {
-    root: "/b",
     gitRoot: "/b",
     managers: [
       {
+        configPath: null,
+        lockfilePath: "/b/package-lock.json",
+        manifestPath: "/b/package.json",
         name: "npm",
         role: "primary",
-        manifestPath: "/b/package.json",
-        lockfilePath: "/b/package-lock.json",
-        configPath: null,
       },
     ],
+    root: "/b",
   };
-  const digest = (bytes: string) => `d:${bytes}`;
   await auditAdvisories(locklessPnpm, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest,
+    now: () => 1000,
     readFile: () => null,
-    run: async (argv) => {
+    run: (argv) => {
       calls.push(argv);
-      return { code: 0, stdout: `{"advisories":{}}`, stderr: "" };
+      return { code: 0, stderr: "", stdout: `{"advisories":{}}` };
     },
   });
   const second = await auditAdvisories(unreadNpm, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest,
+    now: () => 1000,
     readFile: () => null,
-    run: async (argv) => {
+    run: (argv) => {
       calls.push(argv);
-      return { code: 0, stdout: `{"advisories":{}}`, stderr: "" };
+      return { code: 0, stderr: "", stdout: `{"advisories":{}}` };
     },
   });
   expect(second.fromCache).toBe(false);
@@ -186,40 +195,44 @@ test("lockless projects do not share a digest cache hit", async () => {
 });
 
 test("npm audit JSON populates package currentVersion and fixVersion on findings", async () => {
-  const cache = createFsCache(join(cacheDir4, "versions"), () => 1_000, 86_400_000);
+  const cache = createFsCache(
+    path.join(cacheDir4, "versions"),
+    () => 1000,
+    86_400_000
+  );
   const npmProject: Project = {
-    root: "/p",
     gitRoot: "/p",
     managers: [
       {
+        configPath: "/p/.npmrc",
+        lockfilePath: "/p/package-lock.json",
+        manifestPath: "/p/package.json",
         name: "npm",
         role: "primary",
-        manifestPath: "/p/package.json",
-        lockfilePath: "/p/package-lock.json",
-        configPath: "/p/.npmrc",
       },
     ],
+    root: "/p",
   };
   const result = await auditAdvisories(npmProject, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest: () => "npm-versions",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async () => ({
+    run: () => ({
       code: 1,
+      stderr: "",
       stdout: JSON.stringify({
         advisories: {
           "1": {
-            module_name: "left-pad",
-            severity: "high",
-            github_advisory_id: "GHSA-left-pad",
-            title: "left-pad high advisory",
             findings: [{ version: "1.0.0" }],
             fixAvailable: { name: "left-pad", version: "1.3.0" },
+            github_advisory_id: "GHSA-left-pad",
+            module_name: "left-pad",
+            severity: "high",
+            title: "left-pad high advisory",
           },
         },
       }),
-      stderr: "",
     }),
   });
   const finding = result.findings.find((row) => row.kind === "advisory");
@@ -229,45 +242,49 @@ test("npm audit JSON populates package currentVersion and fixVersion on findings
 });
 
 test("advisory range is not used as the installed currentVersion", async () => {
-  const cache = createFsCache(join(cacheDir4, "range"), () => 1_000, 86_400_000);
+  const cache = createFsCache(
+    path.join(cacheDir4, "range"),
+    () => 1000,
+    86_400_000
+  );
   const npmProject: Project = {
-    root: "/p",
     gitRoot: "/p",
     managers: [
       {
+        configPath: "/p/.npmrc",
+        lockfilePath: "/p/package-lock.json",
+        manifestPath: "/p/package.json",
         name: "npm",
         role: "primary",
-        manifestPath: "/p/package.json",
-        lockfilePath: "/p/package-lock.json",
-        configPath: "/p/.npmrc",
       },
     ],
+    root: "/p",
   };
   const result = await auditAdvisories(npmProject, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest: () => "npm-range",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async () => ({
+    run: () => ({
       code: 1,
+      stderr: "",
       stdout: JSON.stringify({
         vulnerabilities: {
           "left-pad": {
-            name: "left-pad",
-            severity: "high",
-            range: ">=1.0.0 <2.0.0",
             fixAvailable: { name: "left-pad", version: "1.3.0" },
+            name: "left-pad",
+            range: ">=1.0.0 <2.0.0",
+            severity: "high",
             via: [
               {
                 github_advisory_id: "GHSA-left-pad",
-                title: "left-pad high advisory",
                 severity: "high",
+                title: "left-pad high advisory",
               },
             ],
           },
         },
       }),
-      stderr: "",
     }),
   });
   const finding = result.findings.find((row) => row.kind === "advisory");
@@ -278,39 +295,49 @@ test("advisory range is not used as the installed currentVersion", async () => {
 });
 
 test("range-like version fields never become currentVersion", async () => {
-  const cache = createFsCache(join(cacheDir4, "range-fields"), () => 1_000, 86_400_000);
+  const cache = createFsCache(
+    path.join(cacheDir4, "range-fields"),
+    () => 1000,
+    86_400_000
+  );
   const npmProject: Project = {
-    root: "/p",
     gitRoot: "/p",
     managers: [
       {
+        configPath: "/p/.npmrc",
+        lockfilePath: "/p/package-lock.json",
+        manifestPath: "/p/package.json",
         name: "npm",
         role: "primary",
-        manifestPath: "/p/package.json",
-        lockfilePath: "/p/package-lock.json",
-        configPath: "/p/.npmrc",
       },
     ],
+    root: "/p",
   };
   const vulns = await auditAdvisories(npmProject, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest: () => "npm-range-vulns",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async () => ({
+    run: () => ({
       code: 1,
+      stderr: "",
       stdout: JSON.stringify({
         vulnerabilities: {
           "left-pad": {
-            name: "left-pad",
-            version: "<=2.0.0",
-            package: { name: "left-pad", version: "^1.2.3" },
-            vulns: [{ id: "GHSA-left-pad", severity: "high", title: "left-pad high advisory" }],
             fixAvailable: { name: "left-pad", version: "1.3.0" },
+            name: "left-pad",
+            package: { name: "left-pad", version: "^1.2.3" },
+            version: "<=2.0.0",
+            vulns: [
+              {
+                id: "GHSA-left-pad",
+                severity: "high",
+                title: "left-pad high advisory",
+              },
+            ],
           },
         },
       }),
-      stderr: "",
     }),
   });
   const vulnFinding = vulns.findings.find((row) => row.kind === "advisory");
@@ -320,24 +347,24 @@ test("range-like version fields never become currentVersion", async () => {
 
   const findings = await auditAdvisories(npmProject, loadPolicy({}), {
     cache,
-    now: () => 2_000,
     digest: () => "npm-range-findings",
+    now: () => 2000,
     readFile: () => "lock",
-    run: async () => ({
+    run: () => ({
       code: 1,
+      stderr: "",
       stdout: JSON.stringify({
         advisories: {
           "1": {
-            module_name: "left-pad",
-            severity: "high",
-            github_advisory_id: "GHSA-left-pad",
-            title: "left-pad high advisory",
             findings: [{ version: "^1.2.3" }],
             fixAvailable: { name: "left-pad", version: "1.3.0" },
+            github_advisory_id: "GHSA-left-pad",
+            module_name: "left-pad",
+            severity: "high",
+            title: "left-pad high advisory",
           },
         },
       }),
-      stderr: "",
     }),
   });
   const finding = findings.findings.find((row) => row.kind === "advisory");
@@ -346,40 +373,50 @@ test("range-like version fields never become currentVersion", async () => {
 });
 
 test("x-range version fields never become currentVersion", async () => {
-  const cache = createFsCache(join(cacheDir4, "x-range"), () => 1_000, 86_400_000);
+  const cache = createFsCache(
+    path.join(cacheDir4, "x-range"),
+    () => 1000,
+    86_400_000
+  );
   const npmProject: Project = {
-    root: "/p",
     gitRoot: "/p",
     managers: [
       {
+        configPath: "/p/.npmrc",
+        lockfilePath: "/p/package-lock.json",
+        manifestPath: "/p/package.json",
         name: "npm",
         role: "primary",
-        manifestPath: "/p/package.json",
-        lockfilePath: "/p/package-lock.json",
-        configPath: "/p/.npmrc",
       },
     ],
+    root: "/p",
   };
   const result = await auditAdvisories(npmProject, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest: () => "npm-x-range",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async () => ({
+    run: () => ({
       code: 1,
+      stderr: "",
       stdout: JSON.stringify({
         vulnerabilities: {
           "left-pad": {
-            name: "left-pad",
-            version: "1.2.x",
-            package: { name: "left-pad", version: "1.x" },
             findings: [{ version: "1.2.X" }],
-            vulns: [{ id: "GHSA-left-pad", severity: "high", title: "left-pad high advisory" }],
             fixAvailable: { name: "left-pad", version: "1.3.0" },
+            name: "left-pad",
+            package: { name: "left-pad", version: "1.x" },
+            version: "1.2.x",
+            vulns: [
+              {
+                id: "GHSA-left-pad",
+                severity: "high",
+                title: "left-pad high advisory",
+              },
+            ],
           },
         },
       }),
-      stderr: "",
     }),
   });
   const finding = result.findings.find((row) => row.kind === "advisory");
@@ -390,32 +427,32 @@ test("x-range version fields never become currentVersion", async () => {
 });
 
 test("uv json with deprecated and quarantine statuses emits those finding kinds", async () => {
-  const cache = createFsCache(cacheDir4, () => 1_000, 86_400_000);
+  const cache = createFsCache(cacheDir4, () => 1000, 86_400_000);
   const uvProject: Project = {
-    root: "/uv",
     gitRoot: "/uv",
     managers: [
       {
+        configPath: "/uv/uv.toml",
+        lockfilePath: "/uv/uv.lock",
+        manifestPath: "/uv/pyproject.toml",
         name: "uv",
         role: "primary",
-        manifestPath: "/uv/pyproject.toml",
-        lockfilePath: "/uv/uv.lock",
-        configPath: "/uv/uv.toml",
       },
     ],
+    root: "/uv",
   };
   const result = await auditAdvisories(uvProject, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest: () => "uv-digest",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async () => ({
+    run: () => ({
       code: 0,
-      stdout: JSON.stringify([
-        { name: "oldpkg", version: "1.0.0", status: "deprecated" },
-        { name: "badpkg", version: "2.0.0", status: "quarantine" },
-      ]),
       stderr: "",
+      stdout: JSON.stringify([
+        { name: "oldpkg", status: "deprecated", version: "1.0.0" },
+        { name: "badpkg", status: "quarantine", version: "2.0.0" },
+      ]),
     }),
   });
   expect(result.findings.some((f) => f.kind === "deprecated")).toBe(true);
@@ -423,86 +460,92 @@ test("uv json with deprecated and quarantine statuses emits those finding kinds"
 });
 
 test("poetry primary uses runOsv when provided", async () => {
-  const cache = createFsCache(cacheDir5, () => 1_000, 86_400_000);
+  const cache = createFsCache(cacheDir5, () => 1000, 86_400_000);
   const poetryProject: Project = {
-    root: "/py",
     gitRoot: "/py",
     managers: [
       {
+        configPath: "/py/pyproject.toml",
+        lockfilePath: "/py/poetry.lock",
+        manifestPath: "/py/pyproject.toml",
         name: "poetry",
         role: "primary",
-        manifestPath: "/py/pyproject.toml",
-        lockfilePath: "/py/poetry.lock",
-        configPath: "/py/pyproject.toml",
       },
     ],
+    root: "/py",
   };
   const result = await auditAdvisories(poetryProject, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest: () => "poetry-digest",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async () => ({ code: 0, stdout: `{"advisories":{}}`, stderr: "" }),
-    runOsv: async (lockOrRequirements) => {
+    run: () => ({ code: 0, stderr: "", stdout: `{"advisories":{}}` }),
+    runOsv: (lockOrRequirements) => {
       expect(lockOrRequirements).toBe("/py/poetry.lock");
       return [
         {
-          kind: "advisory",
           code: "GHSA-osv",
-          message: "osv high advisory",
-          severity: "high",
-          path: lockOrRequirements,
           fixable: false,
+          kind: "advisory",
           manager: "poetry",
+          message: "osv high advisory",
+          path: lockOrRequirements,
+          severity: "high",
         },
       ];
     },
   });
-  expect(result.findings.some((f) => f.kind === "advisory" && f.severity === "high")).toBe(true);
+  expect(
+    result.findings.some((f) => f.kind === "advisory" && f.severity === "high")
+  ).toBe(true);
 });
 
 test("pnpm primary runs `pnpm audit --json` and parses a high advisory", async () => {
-  const cache = createFsCache(join(cacheDir8, "pnpm"), () => 1_000, 86_400_000);
+  const cache = createFsCache(
+    path.join(cacheDir8, "pnpm"),
+    () => 1000,
+    86_400_000
+  );
   const calls: string[][] = [];
   const pnpmProject: Project = {
-    root: "/pn",
     gitRoot: "/pn",
     managers: [
       {
+        configPath: "/pn/pnpm-workspace.yaml",
+        lockfilePath: "/pn/pnpm-lock.yaml",
+        manifestPath: "/pn/package.json",
         name: "pnpm",
         role: "primary",
-        manifestPath: "/pn/package.json",
-        lockfilePath: "/pn/pnpm-lock.yaml",
-        configPath: "/pn/pnpm-workspace.yaml",
       },
     ],
+    root: "/pn",
   };
   // pnpm's `pnpm audit --json` mirrors npm's classic (v6-style) advisory
   // report: a top-level `advisories` map keyed by numeric advisory id.
   const result = await auditAdvisories(pnpmProject, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest: () => "pnpm-digest",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async (argv, cwd) => {
+    run: (argv, cwd) => {
       calls.push(argv);
       expect(cwd).toBe("/pn");
       return {
         code: 1,
+        stderr: "",
         stdout: JSON.stringify({
           advisories: {
             "1092": {
-              module_name: "minimatch",
-              severity: "high",
-              github_advisory_id: "GHSA-pnpm-high",
-              title: "minimatch high advisory",
               findings: [{ version: "3.0.0" }],
               fixAvailable: { name: "minimatch", version: "3.0.5" },
+              github_advisory_id: "GHSA-pnpm-high",
+              module_name: "minimatch",
+              severity: "high",
+              title: "minimatch high advisory",
             },
           },
           metadata: { vulnerabilities: { high: 1 } },
         }),
-        stderr: "",
       };
     },
   });
@@ -513,52 +556,56 @@ test("pnpm primary runs `pnpm audit --json` and parses a high advisory", async (
 });
 
 test("bun primary runs `bun audit --json` and parses a critical advisory", async () => {
-  const cache = createFsCache(join(cacheDir8, "bun"), () => 1_000, 86_400_000);
+  const cache = createFsCache(
+    path.join(cacheDir8, "bun"),
+    () => 1000,
+    86_400_000
+  );
   const calls: string[][] = [];
   const bunProject: Project = {
-    root: "/bn",
     gitRoot: "/bn",
     managers: [
       {
+        configPath: "/bn/bunfig.toml",
+        lockfilePath: "/bn/bun.lock",
+        manifestPath: "/bn/package.json",
         name: "bun",
         role: "primary",
-        manifestPath: "/bn/package.json",
-        lockfilePath: "/bn/bun.lock",
-        configPath: "/bn/bunfig.toml",
       },
     ],
+    root: "/bn",
   };
   // bun's `bun audit --json` mirrors npm's v7+ advisory report: a
   // `vulnerabilities` map keyed by package name, each with a `via` array.
   const result = await auditAdvisories(bunProject, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest: () => "bun-digest",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async (argv, cwd) => {
+    run: (argv, cwd) => {
       calls.push(argv);
       expect(cwd).toBe("/bn");
       return {
         code: 1,
+        stderr: "",
         stdout: JSON.stringify({
           auditReportVersion: 2,
           vulnerabilities: {
             "ansi-html": {
+              fixAvailable: { name: "ansi-html", version: "0.0.8" },
               name: "ansi-html",
-              severity: "critical",
               range: "<0.0.8",
+              severity: "critical",
               via: [
                 {
                   github_advisory_id: "GHSA-bun-crit",
-                  title: "ansi-html critical advisory",
                   severity: "critical",
+                  title: "ansi-html critical advisory",
                 },
               ],
-              fixAvailable: { name: "ansi-html", version: "0.0.8" },
             },
           },
         }),
-        stderr: "",
       };
     },
   });
@@ -570,46 +617,50 @@ test("bun primary runs `bun audit --json` and parses a critical advisory", async
 });
 
 test("yarn berry primary runs `yarn npm audit --json` and parses a high advisory", async () => {
-  const cache = createFsCache(join(cacheDir8, "yarn"), () => 1_000, 86_400_000);
+  const cache = createFsCache(
+    path.join(cacheDir8, "yarn"),
+    () => 1000,
+    86_400_000
+  );
   const calls: string[][] = [];
   const yarnProject: Project = {
-    root: "/yn",
     gitRoot: "/yn",
     managers: [
       {
+        configPath: "/yn/.yarnrc.yml",
+        lockfilePath: "/yn/yarn.lock",
+        manifestPath: "/yn/package.json",
         name: "yarn",
         role: "primary",
-        manifestPath: "/yn/package.json",
-        lockfilePath: "/yn/yarn.lock",
-        configPath: "/yn/.yarnrc.yml",
       },
     ],
+    root: "/yn",
   };
   // Yarn Berry's `yarn npm audit --json` emits one tree-reporter node per
   // vulnerability: `{ value: <package>, children: { ID, Issue, Severity, ... } }`.
   const result = await auditAdvisories(yarnProject, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest: () => "yarn-digest",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async (argv, cwd) => {
+    run: (argv, cwd) => {
       calls.push(argv);
       expect(cwd).toBe("/yn");
       return {
         code: 1,
-        stdout: JSON.stringify({
-          value: "browserify-sign",
-          children: {
-            ID: 1094464,
-            Issue: "browserify-sign upper bound check issue in dsaVerify",
-            URL: "https://github.com/advisories/GHSA-x9w5-v3q2-3rhw",
-            Severity: "high",
-            "Vulnerable Versions": ">=2.6.0 <=4.2.1",
-            "Tree Versions": ["4.2.1"],
-            Dependents: ["root-workspace-0b6124@workspace:."],
-          },
-        }),
         stderr: "",
+        stdout: JSON.stringify({
+          children: {
+            Dependents: ["root-workspace-0b6124@workspace:."],
+            ID: 1_094_464,
+            Issue: "browserify-sign upper bound check issue in dsaVerify",
+            Severity: "high",
+            "Tree Versions": ["4.2.1"],
+            URL: "https://github.com/advisories/GHSA-x9w5-v3q2-3rhw",
+            "Vulnerable Versions": ">=2.6.0 <=4.2.1",
+          },
+          value: "browserify-sign",
+        }),
       };
     },
   });
@@ -621,20 +672,24 @@ test("yarn berry primary runs `yarn npm audit --json` and parses a high advisory
 });
 
 test("yarn berry primary parses multi-line NDJSON stdout (real multi-vulnerability output)", async () => {
-  const cache = createFsCache(join(cacheDir8, "yarn-ndjson"), () => 1_000, 86_400_000);
+  const cache = createFsCache(
+    path.join(cacheDir8, "yarn-ndjson"),
+    () => 1000,
+    86_400_000
+  );
   const calls: string[][] = [];
   const yarnProject: Project = {
-    root: "/yn-multi",
     gitRoot: "/yn-multi",
     managers: [
       {
+        configPath: "/yn-multi/.yarnrc.yml",
+        lockfilePath: "/yn-multi/yarn.lock",
+        manifestPath: "/yn-multi/package.json",
         name: "yarn",
         role: "primary",
-        manifestPath: "/yn-multi/package.json",
-        lockfilePath: "/yn-multi/yarn.lock",
-        configPath: "/yn-multi/.yarnrc.yml",
       },
     ],
+    root: "/yn-multi",
   };
   // When yarn reports more than one vulnerability, `yarn npm audit --json`
   // emits several newline-delimited JSON objects (one tree-reporter node per
@@ -642,49 +697,51 @@ test("yarn berry primary parses multi-line NDJSON stdout (real multi-vulnerabili
   // whole string fails and the NDJSON fallback in `parseJson` must split,
   // trim, and parse each line individually.
   const lineOne = JSON.stringify({
-    value: "browserify-sign",
     children: {
-      ID: 1094464,
-      Issue: "browserify-sign upper bound check issue in dsaVerify",
-      URL: "https://github.com/advisories/GHSA-x9w5-v3q2-3rhw",
-      Severity: "high",
-      "Vulnerable Versions": ">=2.6.0 <=4.2.1",
-      "Tree Versions": ["4.2.1"],
       Dependents: ["root-workspace-0b6124@workspace:."],
+      ID: 1_094_464,
+      Issue: "browserify-sign upper bound check issue in dsaVerify",
+      Severity: "high",
+      "Tree Versions": ["4.2.1"],
+      URL: "https://github.com/advisories/GHSA-x9w5-v3q2-3rhw",
+      "Vulnerable Versions": ">=2.6.0 <=4.2.1",
     },
+    value: "browserify-sign",
   });
   const lineTwo = JSON.stringify({
-    value: "ansi-html",
     children: {
-      ID: 1098445,
-      Issue: "ansi-html Uncontrolled Resource Consumption",
-      URL: "https://github.com/advisories/GHSA-whgm-jr23-g3j9",
-      Severity: "critical",
-      "Vulnerable Versions": "<0.0.8",
-      "Tree Versions": ["0.0.7"],
-      "Patched Versions": ">=0.0.8",
       Dependents: ["root-workspace-0b6124@workspace:."],
+      ID: 1_098_445,
+      Issue: "ansi-html Uncontrolled Resource Consumption",
+      "Patched Versions": ">=0.0.8",
+      Severity: "critical",
+      "Tree Versions": ["0.0.7"],
+      URL: "https://github.com/advisories/GHSA-whgm-jr23-g3j9",
+      "Vulnerable Versions": "<0.0.8",
     },
+    value: "ansi-html",
   });
   const result = await auditAdvisories(yarnProject, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest: () => "yarn-multi-digest",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async (argv, cwd) => {
+    run: (argv, cwd) => {
       calls.push(argv);
       expect(cwd).toBe("/yn-multi");
       return {
         code: 1,
-        stdout: `${lineOne}\n${lineTwo}\n`,
         stderr: "",
+        stdout: `${lineOne}\n${lineTwo}\n`,
       };
     },
   });
   expect(calls).toEqual([["yarn", "npm", "audit", "--json"]]);
   const advisories = result.findings.filter((f) => f.kind === "advisory");
   expect(advisories).toHaveLength(2);
-  const browserifySign = advisories.find((f) => f.package === "browserify-sign");
+  const browserifySign = advisories.find(
+    (f) => f.package === "browserify-sign"
+  );
   expect(browserifySign?.severity).toBe("high");
   expect(browserifySign?.code).toBe("1094464");
   const ansiHtml = advisories.find((f) => f.package === "ansi-html");
@@ -694,20 +751,24 @@ test("yarn berry primary parses multi-line NDJSON stdout (real multi-vulnerabili
 });
 
 test("yarn berry primary with empty stdout on a clean repo yields no findings without throwing", async () => {
-  const cache = createFsCache(join(cacheDir8, "yarn-empty"), () => 1_000, 86_400_000);
+  const cache = createFsCache(
+    path.join(cacheDir8, "yarn-empty"),
+    () => 1000,
+    86_400_000
+  );
   const calls: string[][] = [];
   const yarnProject: Project = {
-    root: "/yn-clean",
     gitRoot: "/yn-clean",
     managers: [
       {
+        configPath: "/yn-clean/.yarnrc.yml",
+        lockfilePath: "/yn-clean/yarn.lock",
+        manifestPath: "/yn-clean/package.json",
         name: "yarn",
         role: "primary",
-        manifestPath: "/yn-clean/package.json",
-        lockfilePath: "/yn-clean/yarn.lock",
-        configPath: "/yn-clean/.yarnrc.yml",
       },
     ],
+    root: "/yn-clean",
   };
   // `yarn npm audit --json` on a clean repo exits 0 and prints nothing at
   // all (no JSON, not even `{}`). `parseJson` would throw on empty input,
@@ -715,13 +776,13 @@ test("yarn berry primary with empty stdout on a clean repo yields no findings wi
   // rather than an incomplete-audit failure.
   const result = await auditAdvisories(yarnProject, loadPolicy({}), {
     cache,
-    now: () => 1_000,
     digest: () => "yarn-empty-digest",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async (argv, cwd) => {
+    run: (argv, cwd) => {
       calls.push(argv);
       expect(cwd).toBe("/yn-clean");
-      return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stderr: "", stdout: "" };
     },
   });
   expect(calls).toEqual([["yarn", "npm", "audit", "--json"]]);
@@ -730,26 +791,30 @@ test("yarn berry primary with empty stdout on a clean repo yields no findings wi
 });
 
 test("advisory runner dying (non 0/1 exit code) throws an incomplete-tagged error", async () => {
-  const cache = createFsCache(join(cacheDir8, "incomplete"), () => 1_000, 86_400_000);
+  const cache = createFsCache(
+    path.join(cacheDir8, "incomplete"),
+    () => 1000,
+    86_400_000
+  );
   const deadProject: Project = {
-    root: "/dead",
     gitRoot: "/dead",
     managers: [
       {
+        configPath: "/dead/.npmrc",
+        lockfilePath: "/dead/package-lock.json",
+        manifestPath: "/dead/package.json",
         name: "npm",
         role: "primary",
-        manifestPath: "/dead/package.json",
-        lockfilePath: "/dead/package-lock.json",
-        configPath: "/dead/.npmrc",
       },
     ],
+    root: "/dead",
   };
   const deps = {
     cache,
-    now: () => 1_000,
     digest: () => "dead-digest",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async () => ({ code: 2, stdout: "", stderr: "audit engine crashed" }),
+    run: () => ({ code: 2, stderr: "audit engine crashed", stdout: "" }),
   };
   let caught: unknown;
   try {
@@ -761,27 +826,249 @@ test("advisory runner dying (non 0/1 exit code) throws an incomplete-tagged erro
   expect((caught as { incomplete?: boolean }).incomplete).toBe(true);
 });
 
+test("live advisory argv is one native command per manager", async () => {
+  const cases: {
+    name: "npm" | "pnpm" | "yarn" | "bun" | "uv";
+    argv: string[];
+  }[] = [
+    { argv: ["npm", "audit", "--json"], name: "npm" },
+    { argv: ["pnpm", "audit", "--json"], name: "pnpm" },
+    { argv: ["yarn", "npm", "audit", "--json"], name: "yarn" },
+    { argv: ["bun", "audit", "--json"], name: "bun" },
+    {
+      argv: ["uv", "audit", "--output-format", "json", "--frozen"],
+      name: "uv",
+    },
+  ];
+  await Promise.all(
+    cases.map(async (row) => {
+      const calls: string[][] = [];
+      const cache = createFsCache(
+        path.join(cacheDir8, `argv-${row.name}`),
+        () => 1000,
+        86_400_000
+      );
+      await auditAdvisories(
+        {
+          gitRoot: `/${row.name}`,
+          managers: [
+            {
+              configPath: null,
+              lockfilePath: `/${row.name}/lock`,
+              manifestPath: `/${row.name}/manifest`,
+              name: row.name,
+              role: "primary",
+            },
+          ],
+          root: `/${row.name}`,
+        },
+        loadPolicy({}),
+        {
+          cache,
+          digest: () => `${row.name}-argv`,
+          now: () => 1000,
+          readFile: () => "lock",
+          run: (argv) => {
+            calls.push(argv);
+            return { code: 0, stderr: "", stdout: "{}" };
+          },
+        }
+      );
+      expect(calls).toEqual([row.argv]);
+    })
+  );
+});
+
+test("enabledManagers omitting a live manager skips its native audit subprocess", async () => {
+  const calls: string[][] = [];
+  const cache = createFsCache(
+    path.join(cacheDir8, "disabled"),
+    () => 1000,
+    86_400_000
+  );
+  const result = await auditAdvisories(
+    {
+      gitRoot: "/p",
+      managers: [
+        {
+          configPath: "/p/pnpm-workspace.yaml",
+          lockfilePath: "/p/pnpm-lock.yaml",
+          manifestPath: "/p/package.json",
+          name: "pnpm",
+          role: "primary",
+        },
+      ],
+      root: "/p",
+    },
+    loadPolicy({
+      scanToml: 'enabledManagers = ["npm", "yarn", "bun", "uv"]\n',
+    }),
+    {
+      cache,
+      digest: () => "disabled-pnpm",
+      now: () => 1000,
+      readFile: () => "lock",
+      run: (argv) => {
+        calls.push(argv);
+        return { code: 1, stderr: "", stdout: `{"advisories":{}}` };
+      },
+    }
+  );
+  expect(calls).toEqual([]);
+  expect(result.findings).toEqual([]);
+  expect(result.ranLive).toBe(false);
+});
+
+test("npm v7 vulnerabilities map fills package currentVersion and fixVersion", async () => {
+  const cache = createFsCache(
+    path.join(cacheDir8, "npm-v7"),
+    () => 1000,
+    86_400_000
+  );
+  const result = await auditAdvisories(
+    {
+      gitRoot: "/p",
+      managers: [
+        {
+          configPath: "/p/.npmrc",
+          lockfilePath: "/p/package-lock.json",
+          manifestPath: "/p/package.json",
+          name: "npm",
+          role: "primary",
+        },
+      ],
+      root: "/p",
+    },
+    loadPolicy({}),
+    {
+      cache,
+      digest: () => "npm-v7",
+      now: () => 1000,
+      readFile: () => "lock",
+      run: () => ({
+        code: 1,
+        stderr: "",
+        stdout: JSON.stringify({
+          auditReportVersion: 2,
+          vulnerabilities: {
+            "left-pad": {
+              fixAvailable: { name: "left-pad", version: "1.3.0" },
+              name: "left-pad",
+              severity: "high",
+              via: [
+                {
+                  github_advisory_id: "GHSA-v7",
+                  severity: "high",
+                  title: "left-pad v7 advisory",
+                  version: "1.0.0",
+                },
+              ],
+            },
+          },
+        }),
+      }),
+    }
+  );
+  const finding = result.findings.find((row) => row.kind === "advisory");
+  expect(finding?.package).toBe("left-pad");
+  expect(finding?.code).toBe("GHSA-v7");
+  expect(finding?.currentVersion).toBe("1.0.0");
+  expect(finding?.fixVersion).toBe("1.3.0");
+});
+
+test("cached advisory findings do not leak another repo path", async () => {
+  const cache = createFsCache(
+    path.join(cacheDir8, "path-leak"),
+    () => 1000,
+    86_400_000
+  );
+  const deps = {
+    cache,
+    digest: () => "shared-digest",
+    now: () => 1000,
+    readFile: () => "identical-lock",
+    run: () => ({
+      code: 1,
+      stderr: "",
+      stdout: JSON.stringify({
+        advisories: {
+          "1": {
+            findings: [{ version: "1.0.0" }],
+            github_advisory_id: "GHSA-share",
+            module_name: "left-pad",
+            severity: "high",
+            title: "shared advisory",
+          },
+        },
+      }),
+    }),
+  };
+  const first = await auditAdvisories(
+    {
+      gitRoot: "/a",
+      managers: [
+        {
+          configPath: "/a/.npmrc",
+          lockfilePath: "/a/package-lock.json",
+          manifestPath: "/a/package.json",
+          name: "npm",
+          role: "primary",
+        },
+      ],
+      root: "/a",
+    },
+    loadPolicy({}),
+    deps
+  );
+  expect(first.findings[0]?.path).toBe("/a/package-lock.json");
+
+  const second = await auditAdvisories(
+    {
+      gitRoot: "/b",
+      managers: [
+        {
+          configPath: "/b/.npmrc",
+          lockfilePath: "/b/package-lock.json",
+          manifestPath: "/b/package.json",
+          name: "npm",
+          role: "primary",
+        },
+      ],
+      root: "/b",
+    },
+    loadPolicy({}),
+    deps
+  );
+  expect(second.fromCache).toBe(true);
+  expect(second.findings[0]?.path).toBe("/b/package-lock.json");
+  expect(second.findings[0]?.path).not.toBe("/a/package-lock.json");
+});
+
 test("advisory runner throwing also surfaces an incomplete-tagged error", async () => {
-  const cache = createFsCache(join(cacheDir8, "throws"), () => 1_000, 86_400_000);
+  const cache = createFsCache(
+    path.join(cacheDir8, "throws"),
+    () => 1000,
+    86_400_000
+  );
   const throwsProject: Project = {
-    root: "/throws",
     gitRoot: "/throws",
     managers: [
       {
+        configPath: "/throws/.npmrc",
+        lockfilePath: "/throws/package-lock.json",
+        manifestPath: "/throws/package.json",
         name: "npm",
         role: "primary",
-        manifestPath: "/throws/package.json",
-        lockfilePath: "/throws/package-lock.json",
-        configPath: "/throws/.npmrc",
       },
     ],
+    root: "/throws",
   };
   const deps = {
     cache,
-    now: () => 1_000,
     digest: () => "throws-digest",
+    now: () => 1000,
     readFile: () => "lock",
-    run: async () => {
+    run: () => {
       throw new Error("ENOENT: npm not found");
     },
   };

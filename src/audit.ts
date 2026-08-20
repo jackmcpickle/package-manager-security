@@ -1,23 +1,35 @@
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import path from "node:path";
+
 import { parse } from "smol-toml";
+
 import { auditAdvisories } from "./advisories";
-import { applyAdvisories, type ApplyChoice, type ApplyPrompt } from "./apply-advisories";
-import { applySettings, applySettingsGroup, type ApplySettingsItem } from "./apply-settings";
+import { applyAdvisories } from "./apply-advisories";
+import type { ApplyChoice, ApplyPrompt } from "./apply-advisories";
+import { applySettings, applySettingsGroup } from "./apply-settings";
+import type { ApplySettingsItem } from "./apply-settings";
 import type { Cache } from "./cache";
 import { CACHE_TTL_MS, createFsCache } from "./cache";
 import { discoverProjects } from "./discover";
-import type { ExitCode, Finding, PackageManager, Policy, PresetName, Project, Severity } from "./domain";
+import type {
+  ExitCode,
+  Finding,
+  PackageManager,
+  Policy,
+  PresetName,
+  Project,
+  Severity,
+} from "./domain";
 import { loadPolicy } from "./policy";
 import { preflight } from "./preflight";
 import { auditSettings } from "./settings";
 
 const SEVERITY_RANK: Record<Severity, number> = {
+  critical: 4,
+  high: 3,
   info: 0,
   low: 1,
   moderate: 2,
-  high: 3,
-  critical: 4,
 };
 
 const GATE_RANK: Record<PresetName, number> = {
@@ -26,306 +38,145 @@ const GATE_RANK: Record<PresetName, number> = {
   strict: SEVERITY_RANK.moderate,
 };
 
-export type AuditResult = {
+export interface AuditResult {
   exitCode: ExitCode;
-  projects: Array<{ project: Project; findings: Finding[] }>;
-};
+  projects: { project: Project; findings: Finding[] }[];
+  skippedDirty: string[];
+}
 
 export type AuditRun = (
   argv: string[],
-  cwd: string,
+  cwd: string
 ) => Promise<{ code: number; stdout: string; stderr: string }>;
 
-export async function auditPath(
-  root: string,
-  input: {
-    policy: Policy;
-    apply: boolean;
-    applyAdvisories: boolean;
-    interactive: boolean;
-    concurrency: number;
-    flags?: { preset?: PresetName; overrides?: Record<string, unknown> };
-    force?: boolean;
-    commit?: boolean;
-    allowMajors?: boolean;
-    refresh?: boolean;
-    noCache?: boolean;
-    deps: {
-      readFile: (path: string) => string | null;
-      readDir: (dir: string) => string[];
-      isDir: (path: string) => boolean;
-      which: (binary: string) => string | null;
-      run: AuditRun;
-      runOsv?: (lockOrRequirements: string) => Promise<Finding[]>;
-      cache?: Cache;
-      now?: () => number;
-      digest?: (lockfileBytes: string) => string;
-      writeFile?: (path: string, body: string) => void;
-      gitStatus?: (root: string) => "clean" | "dirty" | "not-git";
-      gitCommit?: (root: string, message: string, files: string[]) => boolean;
-      prompt?: ApplyPrompt;
-      currentVersions?: Record<string, string>;
-      fixVersions?: Record<string, string>;
-    };
-  },
-): Promise<AuditResult> {
-  const { policy, apply, deps, flags } = input;
-  const now = deps.now ?? Date.now;
-  const digest = deps.digest ?? defaultDigest;
-  const cache = deps.cache ?? createFsCache(join(".cache", "pmsec"), now, CACHE_TTL_MS);
-  const discovered = discoverProjects(root, {
-    readFile: deps.readFile,
-    readDir: deps.readDir,
-    isDir: deps.isDir,
-  });
-
-  let policyFailure = false;
-  let incomplete = false;
-  let applySkippedDirty = false;
-  const projects: AuditResult["projects"] = [];
-  const pendingApply: ApplySettingsItem[] = [];
-  const concurrency = Math.max(1, input.concurrency);
-
-  const audited = await mapPool(discovered, concurrency, async (project) => {
-    const repoToml = deps.readFile(join(project.root, ".pmsec.toml")) ?? undefined;
-    const projectPolicy = overlayRepoPolicy(policy, repoToml, flags);
-    const flight = preflight(project, { which: deps.which });
-    const missing = new Set<PackageManager>(flight.missing.map((row) => row.manager));
-    const findings = [
-      ...auditSettings(project, projectPolicy, { readFile: deps.readFile }),
-      ...flight.warnings,
-    ];
-
-    let advisoryIncomplete = false;
-    try {
-      const advisoryProject = {
-        ...project,
-        managers: project.managers.filter((manager) => !missing.has(manager.name)),
-      };
-      const advisories = await auditAdvisories(advisoryProject, projectPolicy, {
-        cache,
-        now,
-        digest,
-        readFile: deps.readFile,
-        run: deps.run,
-        runOsv: deps.runOsv,
-        refresh: input.refresh,
-        noCache: input.noCache,
-      });
-      findings.push(...advisories.findings);
-    } catch (error) {
-      if (isIncomplete(error)) advisoryIncomplete = true;
-      else throw error;
-    }
-
-    return { project, findings, projectPolicy, advisoryIncomplete };
-  });
-
-  for (const row of audited) {
-    if (row.advisoryIncomplete) incomplete = true;
-    const gate = GATE_RANK[row.projectPolicy.preset];
-    if (row.findings.some((finding) => failsGate(finding, gate))) policyFailure = true;
-    projects.push({ project: row.project, findings: row.findings });
-    if (apply && deps.writeFile && deps.gitStatus) {
-      pendingApply.push({
-        project: row.project,
-        findings: row.findings,
-        policy: row.projectPolicy,
-      });
-    }
-  }
-
-  const prompt = deps.prompt;
-  if (input.interactive && prompt) {
-    const appliedRoots = new Set<string>();
-    for (const row of audited) {
-      const choice = await prompt({
-        project: row.project,
-        settingsCount: row.findings.filter((finding) => finding.kind === "settings").length,
-        advisoryCount: row.findings.filter((finding) => isAdvisoryKind(finding.kind)).length,
-      });
-      const dirty = await applyChoice(row, choice, input, appliedRoots);
-      if (dirty) applySkippedDirty = true;
-    }
-  } else {
-    const appliedRoots = new Set<string>();
-    if (apply && deps.writeFile && deps.gitStatus) {
-      for (const group of groupByGitRoot(pendingApply)) {
-        const applied = applySettingsGroup(group, {
-          readFile: deps.readFile,
-          writeFile: deps.writeFile,
-          gitStatus: deps.gitStatus,
-          gitCommit: deps.gitCommit,
-          force: input.force ?? false,
-          commit: input.commit ?? false,
-        });
-        if (applied.skipped === "dirty") applySkippedDirty = true;
-        if (applied.written.length > 0) {
-          appliedRoots.add(group[0]!.project.gitRoot ?? group[0]!.project.root);
-        }
-      }
-    }
-    if (input.applyAdvisories) {
-      for (const row of audited) {
-        const dirty = await applyProjectAdvisories(row, input, appliedRoots);
-        if (dirty) applySkippedDirty = true;
-      }
-    }
-  }
-
-  let exitCode: ExitCode = 0;
-  if (projects.length === 0 || incomplete || applySkippedDirty) exitCode = 2;
-  else if (policyFailure) exitCode = 1;
-
-  return { exitCode, projects };
+export interface AuditPathInput {
+  policy: Policy;
+  apply: boolean;
+  applyAdvisories: boolean;
+  interactive: boolean;
+  concurrency: number;
+  flags?: { preset?: PresetName; overrides?: Record<string, unknown> };
+  force?: boolean;
+  commit?: boolean;
+  allowMajors?: boolean;
+  refresh?: boolean;
+  noCache?: boolean;
+  deps: {
+    readFile: (path: string) => string | null;
+    readDir: (dir: string) => string[];
+    isDir: (path: string) => boolean;
+    which: (binary: string) => string | null;
+    run: AuditRun;
+    runOsv?: (lockOrRequirements: string) => Promise<Finding[]>;
+    cache?: Cache;
+    now?: () => number;
+    digest?: (lockfileBytes: string) => string;
+    writeFile?: (path: string, body: string) => void;
+    gitStatus?: (root: string) => "clean" | "dirty" | "not-git";
+    gitCommit?: (root: string, message: string, files: string[]) => boolean;
+    prompt?: ApplyPrompt;
+    currentVersions?: Record<string, string>;
+    fixVersions?: Record<string, string>;
+  };
 }
 
-type AuditedProject = {
+interface AuditedProject {
   project: Project;
   findings: Finding[];
   projectPolicy: Policy;
   advisoryIncomplete: boolean;
-};
-
-async function applyChoice(
-  row: AuditedProject,
-  choice: ApplyChoice,
-  input: Parameters<typeof auditPath>[1],
-  appliedRoots: Set<string>,
-): Promise<boolean> {
-  let dirty = false;
-  if (choice === "settings" || choice === "both") {
-    dirty = applyProjectSettings(row, input, appliedRoots) || dirty;
-  }
-  if (choice === "advisories" || choice === "both") {
-    dirty = (await applyProjectAdvisories(row, input, appliedRoots, true)) || dirty;
-  }
-  return dirty;
 }
 
-function applyProjectSettings(
-  row: AuditedProject,
-  input: Parameters<typeof auditPath>[1],
-  appliedRoots: Set<string>,
-): boolean {
-  const { deps } = input;
-  if (!deps.writeFile || !deps.gitStatus) return false;
-  const gitRoot = row.project.gitRoot ?? row.project.root;
-  const applied = applySettings(row.project, row.findings, row.projectPolicy, {
-    readFile: deps.readFile,
-    writeFile: deps.writeFile,
-    gitStatus: deps.gitStatus,
-    gitCommit: deps.gitCommit,
-    force: (input.force ?? false) || appliedRoots.has(gitRoot),
-    commit: input.commit ?? false,
-  });
-  if (applied.written.length > 0) appliedRoots.add(gitRoot);
-  return applied.skipped === "dirty";
-}
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
-async function applyProjectAdvisories(
-  row: AuditedProject,
-  input: Parameters<typeof auditPath>[1],
-  appliedRoots: Set<string>,
-  allowMajors?: boolean,
-): Promise<boolean> {
-  const { deps } = input;
-  const gitRoot = row.project.gitRoot ?? row.project.root;
-  // A root we just wrote settings into is dirty by our own doing; still apply.
-  const force = (input.force ?? false) || appliedRoots.has(gitRoot);
-  if (deps.gitStatus && !force && deps.gitStatus(gitRoot) !== "clean") {
+const isIncomplete = (error: unknown): boolean =>
+  typeof error === "object" && error !== null && "incomplete" in error;
+
+const isAdvisoryKind = (kind: Finding["kind"]): boolean =>
+  kind === "advisory" || kind === "deprecated" || kind === "quarantine";
+
+const failsGate = (finding: Finding, gate: number): boolean => {
+  if (finding.kind === "missing-binary") {
+    return false;
+  }
+  if (finding.kind === "deprecated" || finding.kind === "quarantine") {
     return true;
   }
-  await applyAdvisories(row.project, row.findings, {
-    run: deps.run,
-    allowMajors: allowMajors ?? input.allowMajors ?? false,
-    currentVersions: deps.currentVersions ?? versionsFromFindings(row.findings, "current"),
-    fixVersions: deps.fixVersions ?? versionsFromFindings(row.findings, "fix"),
-    policy: row.projectPolicy,
-  });
-  return false;
-}
+  return SEVERITY_RANK[finding.severity] >= gate;
+};
 
-function versionsFromFindings(
+const versionsFromFindings = (
   findings: Finding[],
-  which: "current" | "fix",
-): Record<string, string> {
+  which: "current" | "fix"
+): Record<string, string> => {
   const versions: Record<string, string> = {};
   for (const finding of findings) {
-    if (finding.package === undefined) continue;
-    const value = which === "current" ? finding.currentVersion : finding.fixVersion;
-    if (value !== undefined) versions[finding.package] = value;
+    if (finding.package === undefined) {
+      continue;
+    }
+    const value =
+      which === "current" ? finding.currentVersion : finding.fixVersion;
+    if (value !== undefined) {
+      versions[finding.package] = value;
+    }
   }
   return versions;
-}
+};
 
-function isAdvisoryKind(kind: Finding["kind"]): boolean {
-  return kind === "advisory" || kind === "deprecated" || kind === "quarantine";
-}
+export const defaultDigest = (lockfileBytes: string): string =>
+  createHash("sha256").update(lockfileBytes).digest("hex");
 
-async function mapPool<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      results[index] = await fn(items[index]!);
-    }
-  };
-  const size = Math.max(1, Math.min(concurrency, items.length || 1));
-  await Promise.all(Array.from({ length: size }, () => worker()));
-  return results;
-}
-
-export function defaultDigest(lockfileBytes: string): string {
-  return createHash("sha256").update(lockfileBytes).digest("hex");
-}
-
-function overlayRepoPolicy(
-  base: Policy,
-  repoToml: string | undefined,
-  flags?: { preset?: PresetName; overrides?: Record<string, unknown> },
-): Policy {
-  if (repoToml === undefined) return base;
-  const repo = loadPolicy({ repoToml });
-  let parsed: unknown;
+const parseRepoKeys = (repoToml: string): Record<string, unknown> => {
   try {
-    parsed = parse(repoToml);
+    const parsed: unknown = parse(repoToml);
+    return isPlainObject(parsed) ? parsed : {};
   } catch {
-    parsed = {};
+    return {};
   }
-  const keys = isPlainObject(parsed) ? parsed : {};
-  const flagOverrides = flags?.overrides ?? {};
-  const perManager: Policy["perManager"] = { ...base.perManager };
-  for (const [name, table] of Object.entries(repo.perManager)) {
+};
+
+const mergePerManager = (
+  base: Policy["perManager"],
+  repo: Policy["perManager"],
+  flagOverrides: Record<string, unknown>
+): Policy["perManager"] => {
+  const perManager: Policy["perManager"] = { ...base };
+  for (const [name, table] of Object.entries(repo)) {
     const key = name as keyof Policy["perManager"];
     perManager[key] = { ...perManager[key], ...table, ...flagOverrides };
   }
+  return perManager;
+};
+
+const overlayRepoPolicy = (
+  base: Policy,
+  repoToml: string | undefined,
+  flags?: { preset?: PresetName; overrides?: Record<string, unknown> }
+): Policy => {
+  if (repoToml === undefined) {
+    return base;
+  }
+  const repo = loadPolicy({ repoToml });
+  const keys = parseRepoKeys(repoToml);
+  const flagOverrides = flags?.overrides ?? {};
   return {
-    preset: flags?.preset ?? (typeof keys.preset === "string" ? repo.preset : base.preset),
     enabledManagers: Array.isArray(keys.enabledManagers)
       ? repo.enabledManagers
       : base.enabledManagers,
     overrides: { ...base.overrides, ...repo.overrides, ...flagOverrides },
-    perManager,
+    perManager: mergePerManager(
+      base.perManager,
+      repo.perManager,
+      flagOverrides
+    ),
+    preset:
+      flags?.preset ??
+      (typeof keys.preset === "string" ? repo.preset : base.preset),
   };
-}
+};
 
-function failsGate(finding: Finding, gate: number): boolean {
-  if (finding.kind === "missing-binary") return false;
-  return SEVERITY_RANK[finding.severity] >= gate;
-}
-
-function isIncomplete(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "incomplete" in error;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function groupByGitRoot(items: ApplySettingsItem[]): ApplySettingsItem[][] {
+const groupByGitRoot = (items: ApplySettingsItem[]): ApplySettingsItem[][] => {
   const groups = new Map<string, ApplySettingsItem[]>();
   for (const item of items) {
     const key = item.project.gitRoot ?? item.project.root;
@@ -334,4 +185,410 @@ function groupByGitRoot(items: ApplySettingsItem[]): ApplySettingsItem[][] {
     groups.set(key, group);
   }
   return [...groups.values()];
+};
+
+const mapPool = async <T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> => {
+  const results: R[] = Array.from({ length: items.length });
+  let next = 0;
+  const runNext = async (): Promise<void> => {
+    if (next >= items.length) {
+      return;
+    }
+    const index = next;
+    next += 1;
+    const item = items[index];
+    if (item !== undefined) {
+      results[index] = await fn(item);
+    }
+    await runNext();
+  };
+  const size = Math.max(1, Math.min(concurrency, items.length || 1));
+  await Promise.all(Array.from({ length: size }, () => runNext()));
+  return results;
+};
+
+const mapSerial = async <T, R>(
+  items: readonly T[],
+  fn: (item: T) => Promise<R>
+): Promise<R[]> => {
+  const out: R[] = [];
+  const runAt = async (index: number): Promise<void> => {
+    if (index >= items.length) {
+      return;
+    }
+    const item = items[index];
+    if (item !== undefined) {
+      out.push(await fn(item));
+    }
+    await runAt(index + 1);
+  };
+  await runAt(0);
+  return out;
+};
+
+const projectGitRoot = (project: Project): string =>
+  project.gitRoot ?? project.root;
+
+const applySettingsForce = (
+  input: AuditPathInput,
+  appliedRoots: Set<string>,
+  gitRoot: string
+): boolean => (input.force ?? false) || appliedRoots.has(gitRoot);
+
+const applyProjectSettings = (
+  row: AuditedProject,
+  input: AuditPathInput,
+  appliedRoots: Set<string>
+): boolean => {
+  const { writeFile, gitStatus } = input.deps;
+  if (writeFile === undefined || gitStatus === undefined) {
+    return false;
+  }
+  const gitRoot = projectGitRoot(row.project);
+  const applied = applySettings(row.project, row.findings, row.projectPolicy, {
+    commit: input.commit ?? false,
+    force: applySettingsForce(input, appliedRoots, gitRoot),
+    gitCommit: input.deps.gitCommit,
+    gitStatus,
+    readFile: input.deps.readFile,
+    writeFile,
+  });
+  if (applied.written.length > 0) {
+    appliedRoots.add(gitRoot);
+  }
+  return applied.skipped === "dirty";
+};
+
+const shouldSkipDirty = (
+  input: AuditPathInput,
+  gitRoot: string,
+  appliedRoots: Set<string>
+): boolean => {
+  const force = applySettingsForce(input, appliedRoots, gitRoot);
+  const { gitStatus } = input.deps;
+  return Boolean(gitStatus && !force && gitStatus(gitRoot) !== "clean");
+};
+
+const applyProjectAdvisories = async (
+  row: AuditedProject,
+  input: AuditPathInput,
+  appliedRoots: Set<string>,
+  allowMajors?: boolean
+): Promise<boolean> => {
+  const { deps } = input;
+  const gitRoot = row.project.gitRoot ?? row.project.root;
+  // A root we just wrote settings into is dirty by our own doing; still apply.
+  if (shouldSkipDirty(input, gitRoot, appliedRoots)) {
+    return true;
+  }
+  await applyAdvisories(row.project, row.findings, {
+    allowMajors: allowMajors ?? input.allowMajors ?? false,
+    currentVersions:
+      deps.currentVersions ?? versionsFromFindings(row.findings, "current"),
+    fixVersions: deps.fixVersions ?? versionsFromFindings(row.findings, "fix"),
+    policy: row.projectPolicy,
+    run: deps.run,
+  });
+  return false;
+};
+
+const applyChoice = async (
+  row: AuditedProject,
+  choice: ApplyChoice,
+  input: AuditPathInput,
+  appliedRoots: Set<string>
+): Promise<boolean> => {
+  let dirty = false;
+  if (choice === "settings" || choice === "both") {
+    dirty = applyProjectSettings(row, input, appliedRoots) || dirty;
+  }
+  if (choice === "advisories" || choice === "both") {
+    dirty =
+      (await applyProjectAdvisories(row, input, appliedRoots, true)) || dirty;
+  }
+  return dirty;
+};
+
+const runProjectAdvisories = async (
+  project: Project,
+  projectPolicy: Policy,
+  missing: Set<PackageManager>,
+  input: AuditPathInput,
+  cache: Cache,
+  now: () => number,
+  digest: (lockfileBytes: string) => string
+): Promise<{ findings: Finding[]; advisoryIncomplete: boolean }> => {
+  try {
+    const advisories = await auditAdvisories(
+      {
+        ...project,
+        managers: project.managers.filter(
+          (manager) => !missing.has(manager.name)
+        ),
+      },
+      projectPolicy,
+      {
+        cache,
+        digest,
+        noCache: input.noCache,
+        now,
+        readFile: input.deps.readFile,
+        refresh: input.refresh,
+        run: input.deps.run,
+        runOsv: input.deps.runOsv,
+      }
+    );
+    return { advisoryIncomplete: false, findings: advisories.findings };
+  } catch (error) {
+    if (isIncomplete(error)) {
+      return { advisoryIncomplete: true, findings: [] };
+    }
+    throw error;
+  }
+};
+
+const auditOneProject = async (
+  project: Project,
+  input: AuditPathInput,
+  cache: Cache,
+  now: () => number,
+  digest: (lockfileBytes: string) => string
+): Promise<AuditedProject> => {
+  const repoToml =
+    input.deps.readFile(path.join(project.root, ".pmsec.toml")) ?? undefined;
+  const projectPolicy = overlayRepoPolicy(input.policy, repoToml, input.flags);
+  const flight = preflight(project, { which: input.deps.which });
+  const missing = new Set<PackageManager>(
+    flight.missing.map((row) => row.manager)
+  );
+  const findings = [
+    ...auditSettings(project, projectPolicy, { readFile: input.deps.readFile }),
+    ...flight.warnings,
+  ];
+  const advisories = await runProjectAdvisories(
+    project,
+    projectPolicy,
+    missing,
+    input,
+    cache,
+    now,
+    digest
+  );
+  findings.push(...advisories.findings);
+  return {
+    advisoryIncomplete: advisories.advisoryIncomplete,
+    findings,
+    project,
+    projectPolicy,
+  };
+};
+
+interface RecordedAudit {
+  policyFailure: boolean;
+  incomplete: boolean;
+  projects: AuditResult["projects"];
+  pendingApply: ApplySettingsItem[];
 }
+
+const recordAuditedRow = (
+  row: AuditedProject,
+  apply: boolean,
+  deps: AuditPathInput["deps"],
+  acc: RecordedAudit
+): void => {
+  if (row.advisoryIncomplete) {
+    acc.incomplete = true;
+  }
+  const gate = GATE_RANK[row.projectPolicy.preset];
+  if (row.findings.some((finding) => failsGate(finding, gate))) {
+    acc.policyFailure = true;
+  }
+  acc.projects.push({ findings: row.findings, project: row.project });
+  if (apply && deps.writeFile && deps.gitStatus) {
+    acc.pendingApply.push({
+      findings: row.findings,
+      policy: row.projectPolicy,
+      project: row.project,
+    });
+  }
+};
+
+const recordAudited = (
+  audited: AuditedProject[],
+  apply: boolean,
+  deps: AuditPathInput["deps"]
+): RecordedAudit => {
+  const acc: RecordedAudit = {
+    incomplete: false,
+    pendingApply: [],
+    policyFailure: false,
+    projects: [],
+  };
+  for (const row of audited) {
+    recordAuditedRow(row, apply, deps, acc);
+  }
+  return acc;
+};
+
+const promptCounts = (findings: Finding[]) => ({
+  advisoryCount: findings.filter((finding) => isAdvisoryKind(finding.kind))
+    .length,
+  settingsCount: findings.filter((finding) => finding.kind === "settings")
+    .length,
+});
+
+const applyInteractiveChoices = async (
+  audited: AuditedProject[],
+  prompt: ApplyPrompt,
+  input: AuditPathInput
+): Promise<Set<string>> => {
+  const skippedDirty = new Set<string>();
+  const appliedRoots = new Set<string>();
+  await mapSerial(audited, async (row) => {
+    const choice = await prompt({
+      ...promptCounts(row.findings),
+      project: row.project,
+    });
+    const dirty = await applyChoice(row, choice, input, appliedRoots);
+    if (dirty) {
+      skippedDirty.add(row.project.gitRoot ?? row.project.root);
+    }
+  });
+  return skippedDirty;
+};
+
+const applyOneSettingsGroup = (
+  group: ApplySettingsItem[],
+  input: AuditPathInput,
+  writeFile: (path: string, body: string) => void,
+  gitStatus: (root: string) => "clean" | "dirty" | "not-git",
+  appliedRoots: Set<string>,
+  skippedDirty: Set<string>
+): void => {
+  const [first] = group;
+  if (first === undefined) {
+    return;
+  }
+  const applied = applySettingsGroup(group, {
+    commit: input.commit ?? false,
+    force: input.force ?? false,
+    gitCommit: input.deps.gitCommit,
+    gitStatus,
+    readFile: input.deps.readFile,
+    writeFile,
+  });
+  const gitRoot = first.project.gitRoot ?? first.project.root;
+  if (applied.skipped === "dirty") {
+    skippedDirty.add(gitRoot);
+  }
+  if (applied.written.length > 0) {
+    appliedRoots.add(gitRoot);
+  }
+};
+
+const applyGroupedSettings = (
+  pendingApply: ApplySettingsItem[],
+  input: AuditPathInput,
+  appliedRoots: Set<string>,
+  skippedDirty: Set<string>
+): void => {
+  const { writeFile, gitStatus } = input.deps;
+  if (!(input.apply && writeFile && gitStatus)) {
+    return;
+  }
+  for (const group of groupByGitRoot(pendingApply)) {
+    applyOneSettingsGroup(
+      group,
+      input,
+      writeFile,
+      gitStatus,
+      appliedRoots,
+      skippedDirty
+    );
+  }
+};
+
+const applyAllAdvisories = async (
+  audited: AuditedProject[],
+  input: AuditPathInput,
+  appliedRoots: Set<string>,
+  skippedDirty: Set<string>
+): Promise<void> => {
+  if (!input.applyAdvisories) {
+    return;
+  }
+  await mapSerial(audited, async (row) => {
+    const dirty = await applyProjectAdvisories(row, input, appliedRoots);
+    if (dirty) {
+      skippedDirty.add(row.project.gitRoot ?? row.project.root);
+    }
+  });
+};
+
+const applyPhase = async (
+  audited: AuditedProject[],
+  pendingApply: ApplySettingsItem[],
+  input: AuditPathInput
+): Promise<Set<string>> => {
+  const { prompt } = input.deps;
+  if (input.interactive && prompt) {
+    return applyInteractiveChoices(audited, prompt, input);
+  }
+  const skippedDirty = new Set<string>();
+  const appliedRoots = new Set<string>();
+  applyGroupedSettings(pendingApply, input, appliedRoots, skippedDirty);
+  await applyAllAdvisories(audited, input, appliedRoots, skippedDirty);
+  return skippedDirty;
+};
+
+const exitCodeFor = (
+  projects: AuditResult["projects"],
+  incomplete: boolean,
+  skippedDirty: Set<string>,
+  policyFailure: boolean
+): ExitCode => {
+  if (projects.length === 0 || incomplete || skippedDirty.size > 0) {
+    return 2;
+  }
+  if (policyFailure) {
+    return 1;
+  }
+  return 0;
+};
+
+export const auditPath = async (
+  root: string,
+  input: AuditPathInput
+): Promise<AuditResult> => {
+  const { deps } = input;
+  const now = deps.now ?? Date.now;
+  const digest = deps.digest ?? defaultDigest;
+  const cache =
+    deps.cache ??
+    createFsCache(path.join(".cache", "pmsec"), now, CACHE_TTL_MS);
+  const discovered = discoverProjects(root, {
+    isDir: deps.isDir,
+    readDir: deps.readDir,
+    readFile: deps.readFile,
+  });
+  const concurrency = Math.max(1, input.concurrency);
+  const audited = await mapPool(discovered, concurrency, (project) =>
+    auditOneProject(project, input, cache, now, digest)
+  );
+  const recorded = recordAudited(audited, input.apply, deps);
+  const skippedDirty = await applyPhase(audited, recorded.pendingApply, input);
+  return {
+    exitCode: exitCodeFor(
+      recorded.projects,
+      recorded.incomplete,
+      skippedDirty,
+      recorded.policyFailure
+    ),
+    projects: recorded.projects,
+    skippedDirty: [...skippedDirty],
+  };
+};
