@@ -216,6 +216,16 @@ test("scalar tool.poetry key is not poetry", () => {
   expect(projects.some((p) => p.managers.some((m) => m.name === "poetry"))).toBe(false);
 });
 
+test("TOML date scalar tool.poetry is not poetry", () => {
+  const projects = discoverProjects(
+    "/date-poetry",
+    memoryFs({
+      "/date-poetry/pyproject.toml": `[tool]\npoetry = 1979-05-27T07:32:00Z\n`,
+    }),
+  );
+  expect(projects.some((p) => p.managers.some((m) => m.name === "poetry"))).toBe(false);
+});
+
 test("skip directories are not walked for repos or PM roots", () => {
   const projects = discoverProjects(
     "/root",
