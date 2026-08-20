@@ -24,6 +24,7 @@ export async function run(
     gitStatus?: (root: string) => "clean" | "dirty" | "not-git";
     gitCommit?: (root: string, message: string, files: string[]) => boolean;
     prompt?: ApplyPrompt;
+    readLine?: () => Promise<string>;
     currentVersions?: Record<string, string>;
     fixVersions?: Record<string, string>;
   },
@@ -76,7 +77,9 @@ export async function run(
       writeFile: deps?.writeFile ?? writeFile,
       gitStatus: deps?.gitStatus ?? defaultGitStatus,
       gitCommit: deps?.gitCommit ?? defaultGitCommit,
-      prompt: deps?.prompt,
+      prompt:
+        deps?.prompt ??
+        (flags.interactive ? defaultPrompt(stdout, deps?.readLine ?? readStdinLine) : undefined),
       currentVersions: deps?.currentVersions,
       fixVersions: deps?.fixVersions,
     },
@@ -208,6 +211,35 @@ function parseAuditArgs(args: string[]): {
 
 function writeFile(path: string, body: string): void {
   writeFileSync(path, body);
+}
+
+function defaultPrompt(
+  stdout: { write: (s: string) => unknown },
+  readLine: () => Promise<string>,
+): ApplyPrompt {
+  return async ({ project, settingsCount, advisoryCount }) => {
+    stdout.write(
+      `${project.root}: ${settingsCount} settings, ${advisoryCount} advisories [settings|advisories|both|skip] `,
+    );
+    const line = (await readLine()).trim().toLowerCase();
+    if (line === "settings" || line === "advisories" || line === "both" || line === "skip") {
+      return line;
+    }
+    return "skip";
+  };
+}
+
+async function readStdinLine(): Promise<string> {
+  const reader = Bun.stdin.stream().getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (!buf.includes("\n")) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+  }
+  reader.releaseLock();
+  return buf.split("\n")[0] ?? "";
 }
 
 function defaultGitStatus(root: string): "clean" | "dirty" | "not-git" {

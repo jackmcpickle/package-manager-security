@@ -35,6 +35,7 @@ const leftPadFinding: Finding = {
   path: "/p/package-lock.json",
   fixable: true,
   manager: "npm",
+  package: "left-pad",
 };
 
 test("apply advisories does not cross a major version", async () => {
@@ -169,6 +170,154 @@ test("apply advisories crosses a major when policy preset is strict", async () =
   expect(result.skipped).toBeNull();
 });
 
+const CLEAN_NPMRC =
+  "ignore-scripts=true\naudit=true\naudit-level=high\nmin-release-age=7\nregistry=https://registry.npmjs.org/\n";
+
+test("apply advisories uses package currentVersion and fixVersion on the finding", async () => {
+  const ran: string[][] = [];
+  const result = await applyAdvisories(
+    projectFor("npm"),
+    [
+      {
+        ...findingFor("npm"),
+        package: "left-pad",
+        currentVersion: "1.0.0",
+        fixVersion: "1.3.0",
+      },
+    ],
+    {
+      run: okRun(ran),
+      allowMajors: false,
+      currentVersions: {},
+      fixVersions: {},
+    },
+  );
+  expect(ran).toEqual([["npm", "install", "left-pad@1.3.0", "--save-exact"]]);
+  expect(result.skipped).toBeNull();
+});
+
+test("apply advisories matches package identity not a message substring", async () => {
+  const ran: string[][] = [];
+  await applyAdvisories(
+    projectFor("npm"),
+    [
+      {
+        ...findingFor("npm"),
+        message: "left-pad high advisory",
+        package: "left-pad",
+        currentVersion: "1.0.0",
+        fixVersion: "1.3.0",
+      },
+    ],
+    {
+      run: okRun(ran),
+      allowMajors: false,
+      currentVersions: { pad: "1.0.0" },
+      fixVersions: { pad: "1.3.0" },
+    },
+  );
+  expect(ran).toEqual([["npm", "install", "left-pad@1.3.0", "--save-exact"]]);
+  expect(ran.some((argv) => argv.includes("pad@1.3.0"))).toBe(false);
+});
+
+test("apply-advisories without version maps upgrades from advisory JSON fields", async () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/.npmrc": CLEAN_NPMRC,
+  };
+  const ran: string[][] = [];
+  const result = await auditPath("/p", {
+    policy: loadPolicy({}),
+    apply: false,
+    applyAdvisories: true,
+    interactive: false,
+    concurrency: 1,
+    allowMajors: false,
+    deps: {
+      ...memoryTree(files, ["/p/.git"]),
+      which: () => "/usr/bin/npm",
+      run: async (argv) => {
+        ran.push(argv);
+        if (argv.includes("audit")) {
+          return {
+            code: 1,
+            stdout: JSON.stringify({
+              advisories: {
+                "1": {
+                  module_name: "left-pad",
+                  severity: "high",
+                  github_advisory_id: "GHSA-left-pad",
+                  title: "left-pad high advisory",
+                  findings: [{ version: "1.0.0" }],
+                  fixAvailable: { name: "left-pad", version: "1.3.0" },
+                },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      cache: createFsCache(join(cacheDir, "from-findings"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+    },
+  });
+  const finding = result.projects[0]?.findings.find((row) => row.kind === "advisory");
+  expect(finding?.package).toBe("left-pad");
+  expect(finding?.currentVersion).toBe("1.0.0");
+  expect(finding?.fixVersion).toBe("1.3.0");
+  expect(ran).toContainEqual(["npm", "install", "left-pad@1.3.0", "--save-exact"]);
+});
+
+test("interactive advisories choice allows a major upgrade", async () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/.npmrc": CLEAN_NPMRC,
+  };
+  const ran: string[][] = [];
+  await auditPath("/p", {
+    policy: loadPolicy({}),
+    apply: false,
+    applyAdvisories: false,
+    interactive: true,
+    concurrency: 1,
+    allowMajors: false,
+    deps: {
+      ...memoryTree(files, ["/p/.git"]),
+      which: () => "/usr/bin/npm",
+      run: async (argv) => {
+        ran.push(argv);
+        if (argv.includes("audit")) {
+          return {
+            code: 1,
+            stdout: JSON.stringify({
+              advisories: {
+                "1": {
+                  module_name: "left-pad",
+                  severity: "high",
+                  github_advisory_id: "GHSA-left-pad",
+                  title: "left-pad high advisory",
+                  findings: [{ version: "1.0.0" }],
+                  fixAvailable: { name: "left-pad", version: "2.0.0" },
+                },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      cache: createFsCache(join(cacheDir, "interactive-major"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+      gitStatus: () => "clean" as const,
+      prompt: async () => "advisories",
+    },
+  });
+  expect(ran).toContainEqual(["npm", "install", "left-pad@2.0.0", "--save-exact"]);
+});
+
 function memoryTree(files: Record<string, string>, extraDirs: string[] = []) {
   const dirs = new Set<string>(["/", ...extraDirs]);
   const addDir = (dir: string) => {
@@ -195,9 +344,6 @@ function memoryTree(files: Record<string, string>, extraDirs: string[] = []) {
     isDir: (path: string) => dirs.has(path),
   };
 }
-
-const CLEAN_NPMRC =
-  "ignore-scripts=true\naudit=true\naudit-level=high\nmin-release-age=7\nregistry=https://registry.npmjs.org/\n";
 
 test("audit concurrency pools advisory runs and keeps apply serial", async () => {
   const files: Record<string, string> = {

@@ -325,3 +325,27 @@ test("interactive fake prompt can choose settings only", async () => {
   expect(result.exitCode).not.toBe(2);
 });
 
+test("interactive -i uses default stdin prompt when none is injected", async () => {
+  mkdirSync(join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"), { recursive: true });
+  const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
+  const written: Record<string, string> = {};
+  const stdout: string[] = [];
+  const result = await run(["audit", root, "-i"], {
+    stdout: { write: (s: string) => stdout.push(s) },
+    stderr: { write: () => undefined },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "default-prompt"), () => 1_000, 86_400_000),
+    writeFile: (path, body) => {
+      written[path] = body;
+    },
+    gitStatus: () => "clean",
+    readLine: async () => "settings",
+  });
+  expect(stdout.join("")).toMatch(/settings|advisories|both|skip/i);
+  expect(Object.values(written).some((body) => body.includes("ignore-scripts=true"))).toBe(true);
+  expect(result.exitCode).not.toBe(2);
+});
+

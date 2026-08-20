@@ -46,6 +46,9 @@ export interface Finding {
   path: string;
   fixable: boolean;
   manager?: PackageManager;
+  package?: string;
+  currentVersion?: string;
+  fixVersion?: string;
 }
 
 export interface Policy {

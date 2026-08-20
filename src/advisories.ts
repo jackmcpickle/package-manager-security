@@ -165,6 +165,7 @@ function mapAuditJson(
     id: string,
     message: string,
     kind: FindingKind,
+    fix?: string,
   ) => {
     findings.push({
       kind,
@@ -172,8 +173,11 @@ function mapAuditJson(
       message,
       severity,
       path,
-      fixable: false,
+      fixable: Boolean(fix),
       manager,
+      package: name === "unknown" || name === "" ? undefined : name,
+      currentVersion: version === "unknown" || version === "" ? undefined : version,
+      fixVersion: fix,
     });
     const key = `${name}\0${version}`;
     const row: PackageAdvisory = { name, version, severity, id: id || "advisory.unknown" };
@@ -219,6 +223,7 @@ function walkItem(
     id: string,
     message: string,
     kind: FindingKind,
+    fix?: string,
   ) => void,
 ): void {
   if (!isPlainObject(item)) return;
@@ -234,17 +239,18 @@ function walkItem(
   if (Array.isArray(item.via)) {
     const name = String(item.name ?? item.module_name ?? "unknown");
     const version = firstVersion(item);
+    const fix = extractFix(item);
     for (const via of item.via) {
       if (!isPlainObject(via)) continue;
       const id = advisoryId(via);
       const severity = asSeverity(via.severity ?? item.severity);
       const message = String(via.title ?? via.summary ?? `${name} ${severity} advisory`);
-      push(name, version, severity, id, message, kind);
+      push(name, version, severity, id, message, kind, extractFix(via) ?? fix);
     }
     if (item.via.every((v) => typeof v === "string") && item.via.length > 0) {
       const id = advisoryId(item);
       const severity = asSeverity(item.severity);
-      push(name, version, severity, id, String(item.title ?? `${name} ${severity} advisory`), kind);
+      push(name, version, severity, id, String(item.title ?? `${name} ${severity} advisory`), kind, fix);
     }
     return;
   }
@@ -252,12 +258,13 @@ function walkItem(
   if (Array.isArray(item.vulns)) {
     const name = String(item.name ?? packageName(item.package) ?? "unknown");
     const version = String(item.version ?? packageVersion(item.package) ?? firstVersion(item));
+    const fix = extractFix(item);
     for (const vuln of item.vulns) {
       if (!isPlainObject(vuln)) continue;
       const id = advisoryId(vuln);
       const severity = asSeverity(vuln.severity ?? item.severity);
       const message = String(vuln.summary ?? vuln.title ?? `${name} ${severity} advisory`);
-      push(name, version, severity, id, message, kind);
+      push(name, version, severity, id, message, kind, extractFix(vuln) ?? fix);
     }
     return;
   }
@@ -284,10 +291,36 @@ function walkItem(
             isPlainObject(f) ? String(f.version ?? firstVersion(item)) : firstVersion(item),
           )
         : [String(packageVersion(item.package) ?? firstVersion(item))];
+    const fix = extractFix(item);
     for (const version of versions) {
-      push(name, version, severity, id, message, kindFromItem(item, kind));
+      push(name, version, severity, id, message, kindFromItem(item, kind), fix);
     }
   }
+}
+
+function extractFix(item: Record<string, unknown>): string | undefined {
+  const available = item.fixAvailable;
+  if (isPlainObject(available) && typeof available.version === "string" && available.version !== "") {
+    return available.version;
+  }
+  if (typeof available === "string" && available !== "" && available !== "true") {
+    return versionFromRange(available);
+  }
+  for (const key of ["first_patched_version", "firstPatchedVersion", "patched_version"] as const) {
+    const raw = item[key];
+    if (typeof raw === "string") {
+      const version = versionFromRange(raw);
+      if (version !== undefined) return version;
+    }
+  }
+  if (typeof item.patched_versions === "string") return versionFromRange(item.patched_versions);
+  if (Array.isArray(item.fixed) && typeof item.fixed[0] === "string") return item.fixed[0];
+  return undefined;
+}
+
+function versionFromRange(range: string): string | undefined {
+  const match = range.match(/(\d+\.\d+\.\d+[\w.-]*)/);
+  return match?.[1];
 }
 
 function kindFromItem(item: Record<string, unknown>, fallback: FindingKind): FindingKind {

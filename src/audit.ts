@@ -190,7 +190,7 @@ async function applyChoice(
     dirty = applyProjectSettings(row, input, appliedRoots) || dirty;
   }
   if (choice === "advisories" || choice === "both") {
-    dirty = (await applyProjectAdvisories(row, input)) || dirty;
+    dirty = (await applyProjectAdvisories(row, input, true)) || dirty;
   }
   return dirty;
 }
@@ -218,6 +218,7 @@ function applyProjectSettings(
 async function applyProjectAdvisories(
   row: AuditedProject,
   input: Parameters<typeof auditPath>[1],
+  allowMajors?: boolean,
 ): Promise<boolean> {
   const { deps } = input;
   const gitRoot = row.project.gitRoot ?? row.project.root;
@@ -226,12 +227,25 @@ async function applyProjectAdvisories(
   }
   await applyAdvisories(row.project, row.findings, {
     run: deps.run,
-    allowMajors: input.allowMajors ?? false,
-    currentVersions: deps.currentVersions ?? {},
-    fixVersions: deps.fixVersions ?? {},
+    allowMajors: allowMajors ?? input.allowMajors ?? false,
+    currentVersions: deps.currentVersions ?? versionsFromFindings(row.findings, "current"),
+    fixVersions: deps.fixVersions ?? versionsFromFindings(row.findings, "fix"),
     policy: row.projectPolicy,
   });
   return false;
+}
+
+function versionsFromFindings(
+  findings: Finding[],
+  which: "current" | "fix",
+): Record<string, string> {
+  const versions: Record<string, string> = {};
+  for (const finding of findings) {
+    if (finding.package === undefined) continue;
+    const value = which === "current" ? finding.currentVersion : finding.fixVersion;
+    if (value !== undefined) versions[finding.package] = value;
+  }
+  return versions;
 }
 
 function isAdvisoryKind(kind: Finding["kind"]): boolean {

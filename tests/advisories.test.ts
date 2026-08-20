@@ -131,6 +131,49 @@ test("lockless projects do not share a digest cache hit", async () => {
   expect(calls[1]).toEqual(["npm", "audit", "--json"]);
 });
 
+test("npm audit JSON populates package currentVersion and fixVersion on findings", async () => {
+  const cache = createFsCache(join(cacheDir4, "versions"), () => 1_000, 86_400_000);
+  const npmProject: Project = {
+    root: "/p",
+    gitRoot: "/p",
+    managers: [
+      {
+        name: "npm",
+        role: "primary",
+        manifestPath: "/p/package.json",
+        lockfilePath: "/p/package-lock.json",
+        configPath: "/p/.npmrc",
+      },
+    ],
+  };
+  const result = await auditAdvisories(npmProject, loadPolicy({}), {
+    cache,
+    now: () => 1_000,
+    digest: () => "npm-versions",
+    readFile: () => "lock",
+    run: async () => ({
+      code: 1,
+      stdout: JSON.stringify({
+        advisories: {
+          "1": {
+            module_name: "left-pad",
+            severity: "high",
+            github_advisory_id: "GHSA-left-pad",
+            title: "left-pad high advisory",
+            findings: [{ version: "1.0.0" }],
+            fixAvailable: { name: "left-pad", version: "1.3.0" },
+          },
+        },
+      }),
+      stderr: "",
+    }),
+  });
+  const finding = result.findings.find((row) => row.kind === "advisory");
+  expect(finding?.package).toBe("left-pad");
+  expect(finding?.currentVersion).toBe("1.0.0");
+  expect(finding?.fixVersion).toBe("1.3.0");
+});
+
 test("uv json with deprecated and quarantine statuses emits those finding kinds", async () => {
   const cache = createFsCache(cacheDir4, () => 1_000, 86_400_000);
   const uvProject: Project = {
