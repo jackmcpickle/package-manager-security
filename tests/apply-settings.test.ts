@@ -360,6 +360,216 @@ test("apply does not overwrite invalid existing yaml", () => {
   expect(result.written).not.toContain("/p/pnpm-workspace.yaml");
 });
 
+test("apply writes enableScripts: false to .yarnrc.yml preserving existing keys", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"yarn@3.2.0"}`,
+    "/p/yarn.lock": "",
+    "/p/.yarnrc.yml": `npmRegistryServer: "https://registry.npmjs.org/"\n`,
+  };
+  const project: Project = {
+    root: "/p",
+    gitRoot: "/p",
+    managers: [
+      {
+        name: "yarn",
+        role: "primary",
+        manifestPath: "/p/package.json",
+        lockfilePath: "/p/yarn.lock",
+        configPath: "/p/.yarnrc.yml",
+      },
+    ],
+  };
+  const findings = auditSettings(project, loadPolicy({}), { readFile: (p) => files[p] ?? null });
+  expect(findings.map((f) => f.code)).toEqual(["scripts.unrestricted"]);
+  const result = applySettings(project, findings, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+    gitStatus: () => "clean",
+    force: false,
+    commit: false,
+  });
+  expect(result.skipped).toBeNull();
+  expect(result.written).toContain("/p/.yarnrc.yml");
+  expect(files["/p/.yarnrc.yml"]).toContain("enableScripts: false");
+  expect(files["/p/.yarnrc.yml"]).toContain("npmRegistryServer");
+});
+
+test("apply writes ignoreScripts to bunfig.toml preserving existing content", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/bun.lock": "",
+    "/p/bunfig.toml": `[install]\nregistry = "https://registry.npmjs.org/"\n`,
+  };
+  const project: Project = {
+    root: "/p",
+    gitRoot: "/p",
+    managers: [
+      {
+        name: "bun",
+        role: "primary",
+        manifestPath: "/p/package.json",
+        lockfilePath: "/p/bun.lock",
+        configPath: "/p/bunfig.toml",
+      },
+    ],
+  };
+  const findings = auditSettings(project, loadPolicy({}), { readFile: (p) => files[p] ?? null });
+  expect(findings.map((f) => f.code)).toEqual(["scripts.unrestricted"]);
+  const result = applySettings(project, findings, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+    gitStatus: () => "clean",
+    force: false,
+    commit: false,
+  });
+  expect(result.skipped).toBeNull();
+  expect(result.written).toContain("/p/bunfig.toml");
+  expect(files["/p/bunfig.toml"]).toContain("ignoreScripts = true");
+  expect(files["/p/bunfig.toml"]).toContain("registry = \"https://registry.npmjs.org/\"");
+});
+
+test("apply merges uv fix into existing [tool.uv] in pyproject.toml, not a new uv.toml", () => {
+  const files: Record<string, string> = {
+    "/p/pyproject.toml": `[project]\nname = "x"\n\n[tool.uv]\nindex-strategy = "unsafe-best-match"\n`,
+    "/p/uv.lock": "",
+  };
+  const project: Project = {
+    root: "/p",
+    gitRoot: "/p",
+    managers: [
+      {
+        name: "uv",
+        role: "primary",
+        manifestPath: "/p/pyproject.toml",
+        lockfilePath: "/p/uv.lock",
+        configPath: "/p/pyproject.toml",
+      },
+    ],
+  };
+  const findings = auditSettings(project, loadPolicy({}), { readFile: (p) => files[p] ?? null });
+  expect(findings.map((f) => f.code)).toEqual(["min-age.disabled"]);
+  const result = applySettings(project, findings, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+    gitStatus: () => "clean",
+    force: false,
+    commit: false,
+  });
+  expect(result.skipped).toBeNull();
+  expect(result.written).toContain("/p/pyproject.toml");
+  expect(files["/p/uv.toml"]).toBeUndefined();
+  expect(files["/p/pyproject.toml"]).toContain("index-strategy = \"unsafe-best-match\"");
+  expect(files["/p/pyproject.toml"]).toContain("exclude-newer");
+});
+
+test("apply writes uv fix into existing uv.toml", () => {
+  const files: Record<string, string> = {
+    "/p/pyproject.toml": `[project]\nname = "x"\n`,
+    "/p/uv.toml": `index-strategy = "unsafe-best-match"\n`,
+    "/p/uv.lock": "",
+  };
+  const project: Project = {
+    root: "/p",
+    gitRoot: "/p",
+    managers: [
+      {
+        name: "uv",
+        role: "primary",
+        manifestPath: "/p/pyproject.toml",
+        lockfilePath: "/p/uv.lock",
+        configPath: "/p/pyproject.toml",
+      },
+    ],
+  };
+  const findings = auditSettings(project, loadPolicy({}), { readFile: (p) => files[p] ?? null });
+  expect(findings.map((f) => f.code)).toEqual(["min-age.disabled"]);
+  const result = applySettings(project, findings, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+    gitStatus: () => "clean",
+    force: false,
+    commit: false,
+  });
+  expect(result.skipped).toBeNull();
+  expect(result.written).toContain("/p/uv.toml");
+  expect(files["/p/pyproject.toml"]).toBe(`[project]\nname = "x"\n`);
+  expect(files["/p/uv.toml"]).toContain("index-strategy = \"unsafe-best-match\"");
+  expect(files["/p/uv.toml"]).toContain("exclude-newer");
+});
+
+test("apply creates .npmrc when missing", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x"}`,
+    "/p/package-lock.json": `{}`,
+  };
+  const project = npmProject("/p");
+  const findings = auditSettings(project, loadPolicy({}), { readFile: (p) => files[p] ?? null });
+  expect(findings.some((f) => f.code === "scripts.unrestricted")).toBe(true);
+  expect(files["/p/.npmrc"]).toBeUndefined();
+  const result = applySettings(project, findings, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+    gitStatus: () => "clean",
+    force: false,
+    commit: false,
+  });
+  expect(result.skipped).toBeNull();
+  expect(result.written).toContain("/p/.npmrc");
+  expect(files["/p/.npmrc"]).toContain("ignore-scripts=true");
+});
+
+test("apply performs no writes when only non-fixable findings are present", () => {
+  const leftover: Finding = {
+    kind: "leftover-lockfile",
+    code: "lockfile.leftover",
+    message: "Leftover npm lockfile is not an apply target",
+    severity: "high",
+    path: "/p/package-lock.json",
+    fixable: false,
+    manager: "npm",
+  };
+  const unsupported: Finding = {
+    kind: "unsupported-pm",
+    code: "pm.unsupported",
+    message: "bower is unsupported",
+    severity: "high",
+    path: "/p/bower.json",
+    fixable: false,
+    manager: "npm",
+  };
+  const notUsingUv: Finding = {
+    kind: "not-using-uv",
+    code: "python.not-uv",
+    message: "pip project is not using uv",
+    severity: "high",
+    path: "/p/requirements.txt",
+    fixable: false,
+    manager: "pip",
+  };
+  const project: Project = { root: "/p", gitRoot: "/p", managers: [] };
+  const result = applySettings(project, [leftover, unsupported, notUsingUv], loadPolicy({}), {
+    readFile: () => null,
+    writeFile: () => {
+      throw new Error("must not write");
+    },
+    gitStatus: () => "clean",
+    force: false,
+    commit: false,
+  });
+  expect(result.written).toEqual([]);
+  expect(result.skipped).toBe("nothing");
+});
+
 test("committed is false when git commit fails", () => {
   const files: Record<string, string> = {
     "/p/package.json": `{"name":"x"}`,
