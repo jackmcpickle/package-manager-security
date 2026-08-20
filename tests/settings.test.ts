@@ -300,6 +300,30 @@ test("uv primary missing exclude-newer emits min-age.disabled under standard", (
   expect(findings.some((f) => f.code === "min-age.disabled")).toBe(true);
 });
 
+test("uv exclude-newer as an ISO date ~1 day ago emits min-age.disabled under standard", () => {
+  const oneDayAgo = new Date(Date.now() - 1 * 86_400_000).toISOString();
+  const files: Record<string, string> = {
+    "/p/pyproject.toml": `[tool.uv]\nexclude-newer = "${oneDayAgo}"\n`,
+    "/p/uv.lock": `version = 1\n`,
+  };
+  const findings = auditSettings(uvProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "min-age.disabled")).toBe(true);
+});
+
+test("uv exclude-newer as an ISO date ~30 days ago is quiet under standard", () => {
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const files: Record<string, string> = {
+    "/p/pyproject.toml": `[tool.uv]\nexclude-newer = "${thirtyDaysAgo}"\n`,
+    "/p/uv.lock": `version = 1\n`,
+  };
+  const findings = auditSettings(uvProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "min-age.disabled")).toBe(false);
+});
+
 test("uv strict flags an extra index without index-strategy first-index, standard does not", () => {
   const files: Record<string, string> = {
     "/p/pyproject.toml":

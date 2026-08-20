@@ -446,7 +446,11 @@ test("apply merges uv fix into existing [tool.uv] in pyproject.toml, not a new u
         role: "primary",
         manifestPath: "/p/pyproject.toml",
         lockfilePath: "/p/uv.lock",
-        configPath: "/p/pyproject.toml",
+        // `configPath: null` (rather than pointing at pyproject.toml already)
+        // forces `uvConfigPath` past its early manager.configPath return, so
+        // this test actually exercises the `[tool.uv]`-detection branch that
+        // reads pyproject.toml and checks for an existing `[tool.uv]` table.
+        configPath: null,
       },
     ],
   };
@@ -556,7 +560,10 @@ test("apply performs no writes when only non-fixable findings are present", () =
     fixable: false,
     manager: "pip",
   };
-  const project: Project = { root: "/p", gitRoot: "/p", managers: [] };
+  // Give the project a real npm primary manager (rather than `managers: []`)
+  // so that non-fixability of these findings is the only reason nothing is
+  // written -- an empty `managers` array would produce no writes regardless.
+  const project = npmProject("/p");
   const result = applySettings(project, [leftover, unsupported, notUsingUv], loadPolicy({}), {
     readFile: () => null,
     writeFile: () => {
