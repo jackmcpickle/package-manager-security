@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { join } from "node:path";
 import { run } from "../src/cli";
 
 test("pmsec with no args prints usage and exits 2", async () => {
@@ -12,4 +13,18 @@ test("pmsec with no args prints usage and exits 2", async () => {
   });
   expect(result.exitCode).toBe(2);
   expect(stderr.join("")).toContain("Usage: pmsec");
+});
+
+test("audit of a fixture repo with open npm scripts exits 1 and lists the finding", async () => {
+  const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const result = await run(["audit", root], {
+    stdout: { write: (s: string) => stdout.push(s) },
+    stderr: { write: (s: string) => stderr.push(s) },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+  });
+  expect(result.exitCode).toBe(1);
+  expect(stdout.join("")).toContain("scripts.unrestricted");
 });
