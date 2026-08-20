@@ -1,8 +1,8 @@
 # pmsec
 
-Audit package-manager security settings and advisories across monorepos and folders of many projects — and apply fixes only when explicitly asked.
+Audits package-manager security settings and advisories across monorepos and folders of many projects. It never writes anything unless you pass an apply flag.
 
-Supports **npm**, **pnpm**, **yarn** (Berry), **bun**, and **uv**. Flags Yarn v1 and non-uv Python projects (Poetry, pip, Pipenv).
+Works with npm, pnpm, yarn (Berry), bun, and uv. Yarn v1 and non-uv Python projects (Poetry, pip, Pipenv) get flagged but not fixed.
 
 ## Install
 
@@ -18,11 +18,13 @@ The CLI runs on Bun, so Bun must be on your `PATH` either way.
 
 ### Standalone binary (no Bun needed)
 
-Download the binary for your platform from the [GitHub releases page](https://github.com/jackmcpickle/package-manager-security/releases):
+Grab the binary for your platform from the [releases page](https://github.com/jackmcpickle/package-manager-security/releases):
 
 - `pmsec-linux-x64` / `pmsec-linux-arm64`
 - `pmsec-darwin-x64` / `pmsec-darwin-arm64` (macOS)
 - `pmsec-windows-x64.exe`
+
+Fair warning: they're about 100 MB each, since Bun's runtime is baked in.
 
 ```bash
 curl -fsSL -o pmsec https://github.com/jackmcpickle/package-manager-security/releases/latest/download/pmsec-darwin-arm64
@@ -43,9 +45,9 @@ pmsec audit . --sarif              # SARIF output
 pmsec audit . --report out.md      # markdown report
 ```
 
-Exit codes: `0` pass, `1` policy failure (settings drift or above-gate advisory), `2` incomplete (missing binary, dirty-tree skip, audit subprocess died, or no projects found).
+Exit code `0` means every project passed. `1` means a policy failure, either settings drift or an advisory at or above the preset's gate. `2` means the run was incomplete: a missing binary, a dirty tree blocked an apply, an audit subprocess died, or no projects were found.
 
-Config: `~/.config/pmsec/config.toml`, then `.pmsec.toml` at the scan root or per repo. Closer wins; flags win over files.
+Configuration lives in `~/.config/pmsec/config.toml`, plus `.pmsec.toml` at the scan root or in any repo. The closer file wins, and flags win over files.
 
 ## Development
 
@@ -63,7 +65,7 @@ bun run build          # bundle to dist/pmsec.js (the npm bin, runs on Bun)
 bun run build:binary   # compile a standalone binary to dist/pmsec for this machine
 ```
 
-Cross-compile a binary for another platform:
+To cross-compile for another platform:
 
 ```bash
 bun build ./src/main.ts --compile --target=bun-linux-x64 --outfile dist/pmsec-linux-x64
@@ -73,22 +75,18 @@ Targets: `bun-linux-x64`, `bun-linux-arm64`, `bun-darwin-x64`, `bun-darwin-arm64
 
 ## Releasing
 
-Releases are automated by `.github/workflows/release.yml`. Pushing a version tag:
+`.github/workflows/release.yml` handles releases. Bump the version and push the tag:
 
 ```bash
 npm version patch          # bumps package.json + creates the git tag
 git push --follow-tags
 ```
 
-runs the test suite, then:
+The workflow runs the test suite, creates the GitHub release with generated notes, attaches compiled binaries for all five platforms, and publishes `@jackmcpickle/pmsec` to npm.
 
-1. creates the GitHub release with generated notes,
-2. attaches compiled binaries for all five platforms,
-3. publishes `@jackmcpickle/pmsec` to npm.
+Before the first release, add an npm automation token as the `NPM_TOKEN` repository secret (GitHub → Settings → Secrets and variables → Actions). Without it the npm-publish job fails; the binaries still get attached.
 
-One-time setup: add an npm automation token as the `NPM_TOKEN` repository secret (GitHub → Settings → Secrets and variables → Actions).
-
-Manual publish, if ever needed:
+If you ever need to publish by hand:
 
 ```bash
 npm publish --access public    # prepublishOnly runs tests + build first
