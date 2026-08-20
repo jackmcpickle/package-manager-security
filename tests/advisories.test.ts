@@ -620,6 +620,79 @@ test("yarn berry primary runs `yarn npm audit --json` and parses a high advisory
   expect(advisory?.code).toBe("1094464");
 });
 
+test("yarn berry primary parses multi-line NDJSON stdout (real multi-vulnerability output)", async () => {
+  const cache = createFsCache(join(cacheDir8, "yarn-ndjson"), () => 1_000, 86_400_000);
+  const calls: string[][] = [];
+  const yarnProject: Project = {
+    root: "/yn-multi",
+    gitRoot: "/yn-multi",
+    managers: [
+      {
+        name: "yarn",
+        role: "primary",
+        manifestPath: "/yn-multi/package.json",
+        lockfilePath: "/yn-multi/yarn.lock",
+        configPath: "/yn-multi/.yarnrc.yml",
+      },
+    ],
+  };
+  // When yarn reports more than one vulnerability, `yarn npm audit --json`
+  // emits several newline-delimited JSON objects (one tree-reporter node per
+  // line) rather than a single JSON document, so `JSON.parse(stdout)` on the
+  // whole string fails and the NDJSON fallback in `parseJson` must split,
+  // trim, and parse each line individually.
+  const lineOne = JSON.stringify({
+    value: "browserify-sign",
+    children: {
+      ID: 1094464,
+      Issue: "browserify-sign upper bound check issue in dsaVerify",
+      URL: "https://github.com/advisories/GHSA-x9w5-v3q2-3rhw",
+      Severity: "high",
+      "Vulnerable Versions": ">=2.6.0 <=4.2.1",
+      "Tree Versions": ["4.2.1"],
+      Dependents: ["root-workspace-0b6124@workspace:."],
+    },
+  });
+  const lineTwo = JSON.stringify({
+    value: "ansi-html",
+    children: {
+      ID: 1098445,
+      Issue: "ansi-html Uncontrolled Resource Consumption",
+      URL: "https://github.com/advisories/GHSA-whgm-jr23-g3j9",
+      Severity: "critical",
+      "Vulnerable Versions": "<0.0.8",
+      "Tree Versions": ["0.0.7"],
+      "Patched Versions": ">=0.0.8",
+      Dependents: ["root-workspace-0b6124@workspace:."],
+    },
+  });
+  const result = await auditAdvisories(yarnProject, loadPolicy({}), {
+    cache,
+    now: () => 1_000,
+    digest: () => "yarn-multi-digest",
+    readFile: () => "lock",
+    run: async (argv, cwd) => {
+      calls.push(argv);
+      expect(cwd).toBe("/yn-multi");
+      return {
+        code: 1,
+        stdout: `${lineOne}\n${lineTwo}\n`,
+        stderr: "",
+      };
+    },
+  });
+  expect(calls).toEqual([["yarn", "npm", "audit", "--json"]]);
+  const advisories = result.findings.filter((f) => f.kind === "advisory");
+  expect(advisories).toHaveLength(2);
+  const browserifySign = advisories.find((f) => f.package === "browserify-sign");
+  expect(browserifySign?.severity).toBe("high");
+  expect(browserifySign?.code).toBe("1094464");
+  const ansiHtml = advisories.find((f) => f.package === "ansi-html");
+  expect(ansiHtml?.severity).toBe("critical");
+  expect(ansiHtml?.code).toBe("1098445");
+  expect(ansiHtml?.fixVersion).toBe("0.0.8");
+});
+
 test("advisory runner dying (non 0/1 exit code) throws an incomplete-tagged error", async () => {
   const cache = createFsCache(join(cacheDir8, "incomplete"), () => 1_000, 86_400_000);
   const deadProject: Project = {
