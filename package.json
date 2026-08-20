@@ -1,0 +1,10 @@
+{
+  "name": "pmsec",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": { "pmsec": "./src/main.ts" },
+  "scripts": {
+    "test": "bun test",
+    "build": "bun build ./src/main.ts --compile --outfile dist/pmsec"
+  }
+}
