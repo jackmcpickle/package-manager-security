@@ -1,27 +1,28 @@
 import { parse } from "smol-toml";
+
 import type { PackageManager, Policy, PresetName } from "./domain";
 
 export const PRESET_DEFAULTS = {
+  relaxed: {
+    auditLevel: "critical",
+    ignoreScripts: false,
+    minReleaseAgeDays: 0,
+    requireLockfile: true,
+    requirePmPin: false,
+  },
   standard: {
+    auditLevel: "high",
     ignoreScripts: true,
     minReleaseAgeDays: 7,
-    auditLevel: "high",
     requireLockfile: true,
     requirePmPin: true,
   },
   strict: {
+    auditLevel: "moderate",
     ignoreScripts: true,
     minReleaseAgeDays: 14,
-    auditLevel: "moderate",
     requireLockfile: true,
     requirePmPin: true,
-  },
-  relaxed: {
-    ignoreScripts: false,
-    minReleaseAgeDays: 0,
-    auditLevel: "critical",
-    requireLockfile: true,
-    requirePmPin: false,
   },
 } as const;
 
@@ -33,13 +34,7 @@ const DEFAULT_ENABLED_MANAGERS: PackageManager[] = [
   "uv",
 ];
 
-const CONFIG_MANAGERS = new Set<string>([
-  "npm",
-  "pnpm",
-  "yarn",
-  "bun",
-  "uv",
-]);
+const CONFIG_MANAGERS = new Set<string>(["npm", "pnpm", "yarn", "bun", "uv"]);
 
 const PACKAGE_MANAGERS = new Set<string>([
   ...CONFIG_MANAGERS,
@@ -50,106 +45,146 @@ const PACKAGE_MANAGERS = new Set<string>([
 
 const RESERVED_KEYS = new Set(["preset", "enabledManagers"]);
 
-export function loadPolicy(input: {
-  userToml?: string;
-  scanToml?: string;
-  repoToml?: string;
-  flags?: { preset?: PresetName; overrides?: Record<string, unknown> };
-}): Policy {
-  let preset: PresetName = "standard";
-  let enabledManagers = [...DEFAULT_ENABLED_MANAGERS];
-  let overrides: Record<string, unknown> = {};
-  const tables: Partial<Record<PackageManager, Record<string, unknown>>> = {};
+const isPresetName = (value: unknown): value is PresetName =>
+  value === "relaxed" || value === "standard" || value === "strict";
 
-  for (const toml of [input.userToml, input.scanToml, input.repoToml]) {
-    if (toml === undefined) continue;
-    const layer = parseLayer(toml);
-    if (layer.preset !== undefined) preset = layer.preset;
-    if (layer.enabledManagers !== undefined) {
-      enabledManagers = layer.enabledManagers;
-    }
-    overrides = { ...overrides, ...layer.overrides };
-    for (const [name, table] of Object.entries(layer.perManager) as [
-      PackageManager,
-      Record<string, unknown>,
-    ][]) {
-      tables[name] = { ...tables[name], ...table };
-    }
-  }
+const isConfigManager = (value: unknown): value is PackageManager =>
+  typeof value === "string" && CONFIG_MANAGERS.has(value);
 
-  const flagOverrides = input.flags?.overrides ?? {};
-  if (input.flags?.preset !== undefined) {
-    preset = input.flags.preset;
-  }
-  overrides = { ...overrides, ...flagOverrides };
+const isPackageManager = (value: unknown): value is PackageManager =>
+  typeof value === "string" && PACKAGE_MANAGERS.has(value);
 
-  const perManager: Policy["perManager"] = {};
-  for (const [name, table] of Object.entries(tables) as [
-    PackageManager,
-    Record<string, unknown>,
-  ][]) {
-    perManager[name] = { ...overrides, ...table, ...flagOverrides };
-  }
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
-  return { preset, enabledManagers, overrides, perManager };
-}
-
-function parseLayer(toml: string): {
+interface LayerAcc {
   preset?: PresetName;
   enabledManagers?: PackageManager[];
   overrides: Record<string, unknown>;
   perManager: Partial<Record<PackageManager, Record<string, unknown>>>;
-} {
-  const overrides: Record<string, unknown> = {};
-  const perManager: Partial<Record<PackageManager, Record<string, unknown>>> =
-    {};
-  let preset: PresetName | undefined;
-  let enabledManagers: PackageManager[] | undefined;
+}
 
-  let parsed: Record<string, unknown>;
+interface PolicyState {
+  preset: PresetName;
+  enabledManagers: PackageManager[];
+  overrides: Record<string, unknown>;
+  tables: Partial<Record<PackageManager, Record<string, unknown>>>;
+}
+
+const applySpecialLayerKey = (
+  key: string,
+  value: unknown,
+  acc: LayerAcc
+): boolean => {
+  if (key === "preset") {
+    if (isPresetName(value)) {
+      acc.preset = value;
+    }
+    return true;
+  }
+  if (key === "enabledManagers") {
+    if (Array.isArray(value)) {
+      acc.enabledManagers = value.filter(isPackageManager);
+    }
+    return true;
+  }
+  return false;
+};
+
+const applyLayerKey = (key: string, value: unknown, acc: LayerAcc): void => {
+  if (applySpecialLayerKey(key, value, acc)) {
+    return;
+  }
+  if (isConfigManager(key) && isPlainObject(value)) {
+    acc.perManager[key] = { ...value };
+    return;
+  }
+  if (!RESERVED_KEYS.has(key) && !isPackageManager(key)) {
+    acc.overrides[key] = value;
+  }
+};
+
+const parseLayer = (toml: string): LayerAcc => {
+  const acc: LayerAcc = { overrides: {}, perManager: {} };
   try {
     const raw: unknown = parse(toml);
     if (!isPlainObject(raw)) {
-      return { overrides: {}, perManager: {} };
+      return acc;
     }
-    parsed = raw;
+    for (const [key, value] of Object.entries(raw)) {
+      applyLayerKey(key, value, acc);
+    }
   } catch {
     return { overrides: {}, perManager: {} };
   }
+  return acc;
+};
 
-  for (const [key, value] of Object.entries(parsed)) {
-    if (key === "preset" && isPresetName(value)) {
-      preset = value;
-      continue;
-    }
-    if (key === "enabledManagers" && Array.isArray(value)) {
-      enabledManagers = value.filter(isPackageManager);
-      continue;
-    }
-    if (isConfigManager(key) && isPlainObject(value)) {
-      perManager[key] = { ...value };
-      continue;
-    }
-    if (!RESERVED_KEYS.has(key) && !isPackageManager(key)) {
-      overrides[key] = value;
-    }
+const applyParsedLayer = (state: PolicyState, layer: LayerAcc): void => {
+  const { preset, enabledManagers, overrides, perManager } = layer;
+  if (preset !== undefined) {
+    state.preset = preset;
+  }
+  if (enabledManagers !== undefined) {
+    state.enabledManagers = enabledManagers;
+  }
+  Object.assign(state.overrides, overrides);
+  for (const [name, table] of Object.entries(perManager) as [
+    PackageManager,
+    Record<string, unknown>,
+  ][]) {
+    state.tables[name] = { ...state.tables[name], ...table };
+  }
+};
+
+const applyTomlLayer = (state: PolicyState, toml: string | undefined): void => {
+  if (toml === undefined) {
+    return;
+  }
+  applyParsedLayer(state, parseLayer(toml));
+};
+
+const applyFlagLayer = (
+  state: PolicyState,
+  flags?: { preset?: PresetName; overrides?: Record<string, unknown> }
+): Record<string, unknown> => {
+  const { preset, overrides = {} } = flags ?? {};
+  if (preset !== undefined) {
+    state.preset = preset;
+  }
+  Object.assign(state.overrides, overrides);
+  return overrides;
+};
+
+export const loadPolicy = (input: {
+  userToml?: string;
+  scanToml?: string;
+  repoToml?: string;
+  flags?: { preset?: PresetName; overrides?: Record<string, unknown> };
+}): Policy => {
+  const state: PolicyState = {
+    enabledManagers: [...DEFAULT_ENABLED_MANAGERS],
+    overrides: {},
+    preset: "standard",
+    tables: {},
+  };
+  applyTomlLayer(state, input.userToml);
+  applyTomlLayer(state, input.scanToml);
+  applyTomlLayer(state, input.repoToml);
+  const flagOverrides = applyFlagLayer(state, input.flags);
+
+  const perManager: Policy["perManager"] = {};
+  for (const [name, table] of Object.entries(state.tables) as [
+    PackageManager,
+    Record<string, unknown>,
+  ][]) {
+    perManager[name] = { ...state.overrides, ...table, ...flagOverrides };
   }
 
-  return { preset, enabledManagers, overrides, perManager };
-}
-
-function isPresetName(value: unknown): value is PresetName {
-  return value === "relaxed" || value === "standard" || value === "strict";
-}
-
-function isConfigManager(value: unknown): value is PackageManager {
-  return typeof value === "string" && CONFIG_MANAGERS.has(value);
-}
-
-function isPackageManager(value: unknown): value is PackageManager {
-  return typeof value === "string" && PACKAGE_MANAGERS.has(value);
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+  return {
+    enabledManagers: state.enabledManagers,
+    overrides: state.overrides,
+    perManager,
+    preset: state.preset,
+  };
+};

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+
 import {
   belowFloor,
   compareCoverage,
@@ -6,8 +7,8 @@ import {
   pct,
   ratioDropped,
   summarize,
-  type CoverageSummary,
 } from "../scripts/coverage";
+import type { CoverageSummary } from "../scripts/coverage";
 
 const SAMPLE = `TN:
 SF:src/settings.ts
@@ -49,32 +50,50 @@ test("parseLcov and summarize ignore tests and keep settings/apply groups", () =
 });
 
 test("ratioDropped is true only when the current ratio is lower", () => {
-  expect(ratioDropped({ hit: 89, total: 100 }, { hit: 90, total: 100 })).toBe(true);
-  expect(ratioDropped({ hit: 90, total: 100 }, { hit: 90, total: 100 })).toBe(false);
-  expect(ratioDropped({ hit: 180, total: 200 }, { hit: 90, total: 100 })).toBe(false);
+  expect(ratioDropped({ hit: 89, total: 100 }, { hit: 90, total: 100 })).toBe(
+    true
+  );
+  expect(ratioDropped({ hit: 90, total: 100 }, { hit: 90, total: 100 })).toBe(
+    false
+  );
+  expect(ratioDropped({ hit: 180, total: 200 }, { hit: 90, total: 100 })).toBe(
+    false
+  );
 });
 
 test("compareCoverage fails on a line-coverage drop and on a settings floor miss", () => {
   const baseline: CoverageSummary = {
-    lines: { hit: 190, total: 200 },
     functions: { hit: 4, total: 4 },
-    groups: { settings: { hit: 90, total: 100 }, apply: { hit: 90, total: 100 } },
+    groups: {
+      apply: { hit: 90, total: 100 },
+      settings: { hit: 90, total: 100 },
+    },
+    lines: { hit: 190, total: 200 },
   };
   const dropped = compareCoverage(summarize(parseLcov(SAMPLE)), baseline);
   expect(dropped.ok).toBe(false);
-  expect(dropped.messages.some((message) => message.startsWith("line coverage dropped"))).toBe(true);
+  expect(
+    dropped.messages.some((message) =>
+      message.startsWith("line coverage dropped")
+    )
+  ).toBe(true);
 
   const lowSettings = compareCoverage(
     {
-      lines: { hit: 190, total: 200 },
       functions: { hit: 4, total: 4 },
-      groups: { settings: { hit: 80, total: 100 }, apply: { hit: 90, total: 100 } },
+      groups: {
+        apply: { hit: 90, total: 100 },
+        settings: { hit: 80, total: 100 },
+      },
+      lines: { hit: 190, total: 200 },
     },
-    baseline,
+    baseline
   );
   expect(lowSettings.ok).toBe(false);
-  expect(lowSettings.messages.some((message) => message.includes("settings line coverage"))).toBe(
-    true,
-  );
+  expect(
+    lowSettings.messages.some((message) =>
+      message.includes("settings line coverage")
+    )
+  ).toBe(true);
   expect(belowFloor({ hit: 80, total: 100 }, 85)).toBe(true);
 });

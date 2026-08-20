@@ -6,37 +6,43 @@ export interface Preflight {
 }
 
 const REQUIRED_BINARIES: Partial<Record<PackageManager, string>> = {
+  bun: "bun",
   npm: "npm",
   pnpm: "pnpm",
-  yarn: "yarn",
-  bun: "bun",
   uv: "uv",
+  yarn: "yarn",
 };
 
-export function preflight(
+export const preflight = (
   project: Project,
-  opts: { which: (binary: string) => string | null },
-): Preflight {
+  opts: { which: (binary: string) => string | null }
+): Preflight => {
   const missing: { manager: PackageManager; binary: string }[] = [];
   const warnings: Finding[] = [];
 
   for (const manager of project.managers) {
-    if (manager.role !== "primary") continue;
+    if (manager.role !== "primary") {
+      continue;
+    }
     const binary = REQUIRED_BINARIES[manager.name];
-    if (!binary) continue;
-    if (opts.which(binary)) continue;
+    if (!binary) {
+      continue;
+    }
+    if (opts.which(binary)) {
+      continue;
+    }
 
-    missing.push({ manager: manager.name, binary });
+    missing.push({ binary, manager: manager.name });
     warnings.push({
-      kind: "missing-binary",
       code: "pm.missing-binary",
-      message: `Missing ${binary} binary for ${manager.name}`,
-      severity: "info",
-      path: manager.lockfilePath ?? manager.manifestPath,
       fixable: false,
+      kind: "missing-binary",
       manager: manager.name,
+      message: `Missing ${binary} binary for ${manager.name}`,
+      path: manager.lockfilePath ?? manager.manifestPath,
+      severity: "info",
     });
   }
 
   return { missing, warnings };
-}
+};
