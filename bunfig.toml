@@ -1,2 +1,6 @@
 [test]
 root = "."
+
+[install]
+ignoreScripts = true
+registry = "https://registry.npmjs.org/"
