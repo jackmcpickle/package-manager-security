@@ -93,6 +93,39 @@ test("apply writes pnpm keys to pnpm-workspace.yaml not .npmrc", () => {
   expect(files["/p/.npmrc"]).toBe("registry=https://registry.npmjs.org/\n");
 });
 
+test("apply writes pnpm minimumReleaseAge as 10080 minutes for standard", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
+    "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "/p/pnpm-workspace.yaml": "packages:\n  - '.'\n",
+  };
+  const project: Project = {
+    root: "/p",
+    gitRoot: "/p",
+    managers: [
+      {
+        name: "pnpm",
+        role: "primary",
+        manifestPath: "/p/package.json",
+        lockfilePath: "/p/pnpm-lock.yaml",
+        configPath: "/p/pnpm-workspace.yaml",
+      },
+    ],
+  };
+  const findings = auditSettings(project, loadPolicy({}), { readFile: (p) => files[p] ?? null });
+  const result = applySettings(project, findings, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+    gitStatus: () => "clean",
+    force: false,
+    commit: false,
+  });
+  expect(result.skipped).toBeNull();
+  expect(files["/p/pnpm-workspace.yaml"]).toContain("minimumReleaseAge: 10080");
+});
+
 test("apply does not write leftover lockfiles or ~/.npmrc", () => {
   const files: Record<string, string> = {
     "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,

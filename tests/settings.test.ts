@@ -43,6 +43,48 @@ test("standard preset is quiet on ignore-scripts when set", () => {
   expect(findings.filter((f) => f.kind === "settings")).toEqual([]);
 });
 
+function pnpmProject(root: string): Project {
+  return {
+    root,
+    gitRoot: root,
+    managers: [
+      {
+        name: "pnpm",
+        role: "primary",
+        manifestPath: `${root}/package.json`,
+        lockfilePath: `${root}/pnpm-lock.yaml`,
+        configPath: `${root}/pnpm-workspace.yaml`,
+      },
+    ],
+  };
+}
+
+test("pnpm bare minimumReleaseAge is minutes so 1440 fails the standard 7-day bar", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
+    "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "/p/pnpm-workspace.yaml":
+      "packages:\n  - '.'\nminimumReleaseAge: 1440\nonlyBuiltDependencies: []\n",
+  };
+  const findings = auditSettings(pnpmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "min-age.disabled")).toBe(true);
+});
+
+test("pnpm bare minimumReleaseAge of 10080 minutes meets the standard 7-day bar", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
+    "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "/p/pnpm-workspace.yaml":
+      "packages:\n  - '.'\nminimumReleaseAge: 10080\nonlyBuiltDependencies: []\n",
+  };
+  const findings = auditSettings(pnpmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "min-age.disabled")).toBe(false);
+});
+
 test("leftover npm lockfile is a leftover finding and is not fixable", () => {
   const project: Project = {
     root: "/p",

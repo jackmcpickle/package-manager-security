@@ -12,6 +12,8 @@ const cacheDir2 = mkdtempSync(join(tmpdir(), "pmsec-test-cache2-"));
 const cacheDir3 = mkdtempSync(join(tmpdir(), "pmsec-test-cache3-"));
 const cacheDir4 = mkdtempSync(join(tmpdir(), "pmsec-test-cache4-"));
 const cacheDir5 = mkdtempSync(join(tmpdir(), "pmsec-test-cache5-"));
+const cacheDir6 = mkdtempSync(join(tmpdir(), "pmsec-test-cache6-"));
+const cacheDir7 = mkdtempSync(join(tmpdir(), "pmsec-test-cache7-"));
 
 afterAll(() => {
   rmSync(cacheDir1, { recursive: true, force: true });
@@ -19,6 +21,8 @@ afterAll(() => {
   rmSync(cacheDir3, { recursive: true, force: true });
   rmSync(cacheDir4, { recursive: true, force: true });
   rmSync(cacheDir5, { recursive: true, force: true });
+  rmSync(cacheDir6, { recursive: true, force: true });
+  rmSync(cacheDir7, { recursive: true, force: true });
 });
 
 const project: Project = {
@@ -54,6 +58,54 @@ test("identical lockfile digest within TTL skips the live runner", async () => {
   expect(second.fromCache).toBe(true);
   expect(second.ranLive).toBe(false);
   expect(calls).toHaveLength(1);
+});
+
+test("digest cache hit still runs live audit when refresh or noCache is set", async () => {
+  const calls: string[][] = [];
+  const cache = createFsCache(cacheDir6, () => 1_000, 86_400_000);
+  const deps = {
+    cache,
+    now: () => 1_000,
+    digest: () => "abc",
+    readFile: () => "lock",
+    run: async (argv: string[]) => {
+      calls.push(argv);
+      return { code: 0, stdout: `{"advisories":{}}`, stderr: "" };
+    },
+  };
+  await auditAdvisories(project, loadPolicy({}), deps);
+  expect(calls).toHaveLength(1);
+
+  const refreshed = await auditAdvisories(project, loadPolicy({}), { ...deps, refresh: true });
+  expect(refreshed.ranLive).toBe(true);
+  expect(refreshed.fromCache).toBe(false);
+  expect(calls).toHaveLength(2);
+
+  const uncached = await auditAdvisories(project, loadPolicy({}), { ...deps, noCache: true });
+  expect(uncached.ranLive).toBe(true);
+  expect(uncached.fromCache).toBe(false);
+  expect(calls).toHaveLength(3);
+});
+
+test("noCache skips writing the lockfile digest cache", async () => {
+  const calls: string[][] = [];
+  const cache = createFsCache(cacheDir7, () => 1_000, 86_400_000);
+  const deps = {
+    cache,
+    now: () => 1_000,
+    digest: () => "no-cache-digest",
+    readFile: () => "lock",
+    run: async (argv: string[]) => {
+      calls.push(argv);
+      return { code: 0, stdout: `{"advisories":{}}`, stderr: "" };
+    },
+  };
+  await auditAdvisories(project, loadPolicy({}), { ...deps, noCache: true });
+  expect(calls).toHaveLength(1);
+  const second = await auditAdvisories(project, loadPolicy({}), deps);
+  expect(second.ranLive).toBe(true);
+  expect(second.fromCache).toBe(false);
+  expect(calls).toHaveLength(2);
 });
 
 test("package@version cache hit still runs live audit", async () => {
@@ -220,6 +272,118 @@ test("advisory range is not used as the installed currentVersion", async () => {
   expect(finding?.package).toBe("left-pad");
   expect(finding?.currentVersion).toBeUndefined();
   expect(finding?.currentVersion).not.toBe(">=1.0.0 <2.0.0");
+  expect(finding?.fixVersion).toBe("1.3.0");
+});
+
+test("range-like version fields never become currentVersion", async () => {
+  const cache = createFsCache(join(cacheDir4, "range-fields"), () => 1_000, 86_400_000);
+  const npmProject: Project = {
+    root: "/p",
+    gitRoot: "/p",
+    managers: [
+      {
+        name: "npm",
+        role: "primary",
+        manifestPath: "/p/package.json",
+        lockfilePath: "/p/package-lock.json",
+        configPath: "/p/.npmrc",
+      },
+    ],
+  };
+  const vulns = await auditAdvisories(npmProject, loadPolicy({}), {
+    cache,
+    now: () => 1_000,
+    digest: () => "npm-range-vulns",
+    readFile: () => "lock",
+    run: async () => ({
+      code: 1,
+      stdout: JSON.stringify({
+        vulnerabilities: {
+          "left-pad": {
+            name: "left-pad",
+            version: "<=2.0.0",
+            package: { name: "left-pad", version: "^1.2.3" },
+            vulns: [{ id: "GHSA-left-pad", severity: "high", title: "left-pad high advisory" }],
+            fixAvailable: { name: "left-pad", version: "1.3.0" },
+          },
+        },
+      }),
+      stderr: "",
+    }),
+  });
+  const vulnFinding = vulns.findings.find((row) => row.kind === "advisory");
+  expect(vulnFinding?.currentVersion).toBeUndefined();
+  expect(vulnFinding?.currentVersion).not.toBe("<=2.0.0");
+  expect(vulnFinding?.currentVersion).not.toBe("^1.2.3");
+
+  const findings = await auditAdvisories(npmProject, loadPolicy({}), {
+    cache,
+    now: () => 2_000,
+    digest: () => "npm-range-findings",
+    readFile: () => "lock",
+    run: async () => ({
+      code: 1,
+      stdout: JSON.stringify({
+        advisories: {
+          "1": {
+            module_name: "left-pad",
+            severity: "high",
+            github_advisory_id: "GHSA-left-pad",
+            title: "left-pad high advisory",
+            findings: [{ version: "^1.2.3" }],
+            fixAvailable: { name: "left-pad", version: "1.3.0" },
+          },
+        },
+      }),
+      stderr: "",
+    }),
+  });
+  const finding = findings.findings.find((row) => row.kind === "advisory");
+  expect(finding?.currentVersion).toBeUndefined();
+  expect(finding?.currentVersion).not.toBe("^1.2.3");
+});
+
+test("x-range version fields never become currentVersion", async () => {
+  const cache = createFsCache(join(cacheDir4, "x-range"), () => 1_000, 86_400_000);
+  const npmProject: Project = {
+    root: "/p",
+    gitRoot: "/p",
+    managers: [
+      {
+        name: "npm",
+        role: "primary",
+        manifestPath: "/p/package.json",
+        lockfilePath: "/p/package-lock.json",
+        configPath: "/p/.npmrc",
+      },
+    ],
+  };
+  const result = await auditAdvisories(npmProject, loadPolicy({}), {
+    cache,
+    now: () => 1_000,
+    digest: () => "npm-x-range",
+    readFile: () => "lock",
+    run: async () => ({
+      code: 1,
+      stdout: JSON.stringify({
+        vulnerabilities: {
+          "left-pad": {
+            name: "left-pad",
+            version: "1.2.x",
+            package: { name: "left-pad", version: "1.x" },
+            findings: [{ version: "1.2.X" }],
+            vulns: [{ id: "GHSA-left-pad", severity: "high", title: "left-pad high advisory" }],
+            fixAvailable: { name: "left-pad", version: "1.3.0" },
+          },
+        },
+      }),
+      stderr: "",
+    }),
+  });
+  const finding = result.findings.find((row) => row.kind === "advisory");
+  expect(finding?.package).toBe("left-pad");
+  expect(finding?.currentVersion).toBeUndefined();
+  expect(finding?.currentVersion).not.toBe("1.2.x");
   expect(finding?.fixVersion).toBe("1.3.0");
 });
 

@@ -262,7 +262,7 @@ function auditPnpm(
       findings.push(
         setting(
           "min-age.disabled",
-          `minimumReleaseAge must be at least ${requiredHours} hours`,
+          `minimumReleaseAge must be at least ${requiredHours * 60} minutes`,
           "high",
           yamlPath,
           "pnpm",
@@ -577,16 +577,20 @@ function pnpmRegistryPinned(yaml: Record<string, unknown>): boolean {
 }
 
 function parsePnpmAgeHours(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+  // pnpm treats bare minimumReleaseAge numbers as MINUTES.
+  if (typeof value === "number" && Number.isFinite(value)) return value / 60;
   if (typeof value !== "string") return null;
   const trimmed = value.trim().toLowerCase();
   const match = trimmed.match(
     /^(\d+(?:\.\d+)?)\s*(m|min|mins|minutes|h|hr|hrs|hours|d|day|days|w|week|weeks)?$/,
   );
-  if (!match) return parseNumber(trimmed);
+  if (!match) {
+    const bare = parseNumber(trimmed);
+    return bare === null ? null : bare / 60;
+  }
   const amount = Number(match[1]);
   if (!Number.isFinite(amount)) return null;
-  const unit = match[2] ?? "h";
+  const unit = match[2] ?? "m";
   if (unit.startsWith("w")) return amount * 24 * 7;
   if (unit.startsWith("d")) return amount * 24;
   if (unit.startsWith("m")) return amount / 60;

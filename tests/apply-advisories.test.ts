@@ -238,6 +238,25 @@ test("apply uses the highest same-major fix across findings for one package", as
   expect(result.skipped).toBeNull();
 });
 
+test("apply prefers a release fix over a prerelease of the same version", async () => {
+  const ran: string[][] = [];
+  const result = await applyAdvisories(
+    projectFor("npm"),
+    [
+      { ...findingFor("npm"), package: "left-pad", currentVersion: "1.0.0", fixVersion: "1.5.0-beta.1" },
+      { ...findingFor("npm"), package: "left-pad", currentVersion: "1.0.0", fixVersion: "1.5.0" },
+    ],
+    {
+      run: okRun(ran),
+      allowMajors: false,
+      currentVersions: {},
+      fixVersions: {},
+    },
+  );
+  expect(ran).toEqual([["npm", "install", "left-pad@1.5.0", "--save-exact"]]);
+  expect(result.skipped).toBeNull();
+});
+
 test("apply uses the highest fix including majors when allowMajors is true", async () => {
   const ran: string[][] = [];
   const result = await applyAdvisories(
@@ -329,6 +348,104 @@ test("apply-advisories without version maps upgrades from advisory JSON fields",
   expect(finding?.currentVersion).toBe("1.0.0");
   expect(finding?.fixVersion).toBe("1.3.0");
   expect(ran).toContainEqual(["npm", "install", "left-pad@1.3.0", "--save-exact"]);
+});
+
+const LEFT_PAD_AUDIT_JSON = JSON.stringify({
+  advisories: {
+    "1": {
+      module_name: "left-pad",
+      severity: "high",
+      github_advisory_id: "GHSA-left-pad",
+      title: "left-pad high advisory",
+      findings: [{ version: "1.0.0" }],
+      fixAvailable: { name: "left-pad", version: "1.3.0" },
+    },
+  },
+});
+
+test("--apply --apply-advisories still applies advisories after the settings write dirties the tree", async () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/.npmrc":
+      "audit=true\naudit-level=high\nmin-release-age=7\nregistry=https://registry.npmjs.org/\n",
+  };
+  let tree: "clean" | "dirty" = "clean";
+  const ran: string[][] = [];
+  const result = await auditPath("/p", {
+    policy: loadPolicy({}),
+    apply: true,
+    applyAdvisories: true,
+    interactive: false,
+    concurrency: 1,
+    force: false,
+    commit: false,
+    allowMajors: false,
+    deps: {
+      ...memoryTree(files, ["/p/.git"]),
+      which: () => "/usr/bin/npm",
+      run: async (argv) => {
+        ran.push(argv);
+        if (argv.includes("audit")) {
+          return { code: 1, stdout: LEFT_PAD_AUDIT_JSON, stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      cache: createFsCache(join(cacheDir, "dirty-after-apply"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+      writeFile: (p, b) => {
+        files[p] = b;
+        tree = "dirty";
+      },
+      gitStatus: () => tree,
+    },
+  });
+  expect(files["/p/.npmrc"]).toContain("ignore-scripts=true");
+  expect(ran).toContainEqual(["npm", "install", "left-pad@1.3.0", "--save-exact"]);
+  expect(result.exitCode).not.toBe(2);
+});
+
+test("interactive both applies advisories after the settings write dirties the tree", async () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/.npmrc":
+      "audit=true\naudit-level=high\nmin-release-age=7\nregistry=https://registry.npmjs.org/\n",
+  };
+  let tree: "clean" | "dirty" = "clean";
+  const ran: string[][] = [];
+  const result = await auditPath("/p", {
+    policy: loadPolicy({}),
+    apply: false,
+    applyAdvisories: false,
+    interactive: true,
+    concurrency: 1,
+    force: false,
+    commit: false,
+    allowMajors: false,
+    deps: {
+      ...memoryTree(files, ["/p/.git"]),
+      which: () => "/usr/bin/npm",
+      run: async (argv) => {
+        ran.push(argv);
+        if (argv.includes("audit")) {
+          return { code: 1, stdout: LEFT_PAD_AUDIT_JSON, stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      cache: createFsCache(join(cacheDir, "dirty-after-both"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+      writeFile: (p, b) => {
+        files[p] = b;
+        tree = "dirty";
+      },
+      gitStatus: () => tree,
+      prompt: async () => "both",
+    },
+  });
+  expect(files["/p/.npmrc"]).toContain("ignore-scripts=true");
+  expect(ran).toContainEqual(["npm", "install", "left-pad@1.3.0", "--save-exact"]);
+  expect(result.exitCode).not.toBe(2);
 });
 
 test("interactive advisories choice allows a major upgrade", async () => {

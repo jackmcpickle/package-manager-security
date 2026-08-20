@@ -212,7 +212,8 @@ function mergePnpmYaml(raw: string, codes: Set<string>, settings: ResolvedSettin
     yaml.audit = true;
     yaml.auditLevel = settings.auditLevel;
   }
-  if (codes.has("min-age.disabled")) yaml.minimumReleaseAge = settings.minReleaseAgeDays * 24;
+  // pnpm reads bare minimumReleaseAge numbers as minutes.
+  if (codes.has("min-age.disabled")) yaml.minimumReleaseAge = settings.minReleaseAgeDays * 24 * 60;
   if (codes.has("registry.unpinned") && !hasText(yaml.registry) && !hasDefaultRegistry(yaml)) {
     yaml.registry = DEFAULT_REGISTRY;
   }

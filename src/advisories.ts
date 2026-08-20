@@ -26,6 +26,8 @@ export async function auditAdvisories(
       cwd: string,
     ) => Promise<{ code: number; stdout: string; stderr: string }>;
     runOsv?: (lockOrRequirements: string) => Promise<Finding[]>;
+    refresh?: boolean;
+    noCache?: boolean;
   },
 ): Promise<AdvisoryResult> {
   void deps.now;
@@ -68,11 +70,14 @@ async function runPrimaries(
       argv: string[],
       cwd: string,
     ) => Promise<{ code: number; stdout: string; stderr: string }>;
+    refresh?: boolean;
+    noCache?: boolean;
   },
 ): Promise<AdvisoryResult> {
   const findings: Finding[] = [];
   let ranLive = false;
   let fromCache = false;
+  const skipCacheRead = deps.refresh === true || deps.noCache === true;
 
   for (const manager of primaries) {
     const lockfileBytes = manager.lockfilePath
@@ -80,7 +85,7 @@ async function runPrimaries(
       : null;
     const canCacheLockfile = lockfileBytes !== null;
     const digest = canCacheLockfile ? deps.digest(lockfileBytes) : null;
-    if (digest !== null) {
+    if (digest !== null && !skipCacheRead) {
       const cached = deps.cache.getLockfile(digest);
       if (cached) {
         fromCache = true;
@@ -106,15 +111,17 @@ async function runPrimaries(
     const live = mapAuditJson(parsed, manager.name, manager.lockfilePath ?? manager.manifestPath);
     ranLive = true;
     findings.push(...live.findings);
-    if (digest !== null) {
+    if (digest !== null && deps.noCache !== true) {
       deps.cache.putLockfile(digest, {
         findings: live.findings,
         fromCache: false,
         ranLive: true,
       });
     }
-    for (const entry of live.packages) {
-      deps.cache.putPackage(entry.name, entry.version, entry.rows);
+    if (deps.noCache !== true) {
+      for (const entry of live.packages) {
+        deps.cache.putPackage(entry.name, entry.version, entry.rows);
+      }
     }
   }
 
@@ -176,7 +183,7 @@ function mapAuditJson(
       fixable: Boolean(fix),
       manager,
       package: name === "unknown" || name === "" ? undefined : name,
-      currentVersion: version === "unknown" || version === "" ? undefined : version,
+      currentVersion: concreteVersion(version),
       fixVersion: fix,
     });
     const key = `${name}\0${version}`;
@@ -257,7 +264,7 @@ function walkItem(
 
   if (Array.isArray(item.vulns)) {
     const name = String(item.name ?? packageName(item.package) ?? "unknown");
-    const version = String(item.version ?? packageVersion(item.package) ?? firstVersion(item));
+    const version = firstVersion(item);
     const fix = extractFix(item);
     for (const vuln of item.vulns) {
       if (!isPlainObject(vuln)) continue;
@@ -288,9 +295,13 @@ function walkItem(
     const versions =
       Array.isArray(item.findings) && item.findings.length > 0
         ? item.findings.map((f) =>
-            isPlainObject(f) ? String(f.version ?? firstVersion(item)) : firstVersion(item),
+            isPlainObject(f)
+              ? (concreteVersion(f.version) ??
+                concreteVersion(f.installedVersion) ??
+                firstVersion(item))
+              : firstVersion(item),
           )
-        : [String(packageVersion(item.package) ?? firstVersion(item))];
+        : [firstVersion(item)];
     const fix = extractFix(item);
     for (const version of versions) {
       push(name, version, severity, id, message, kindFromItem(item, kind), fix);
@@ -341,7 +352,10 @@ function packageVersion(value: unknown): string | undefined {
 }
 
 function firstVersion(item: Record<string, unknown>): string {
-  const direct = concreteVersion(item.version) ?? concreteVersion(item.installedVersion);
+  const direct =
+    concreteVersion(item.version) ??
+    concreteVersion(item.installedVersion) ??
+    concreteVersion(packageVersion(item.package));
   if (direct !== undefined) return direct;
   if (Array.isArray(item.findings)) {
     for (const finding of item.findings) {
@@ -364,7 +378,12 @@ function concreteVersion(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   if (trimmed === "" || /[<> =|^~*]/.test(trimmed)) return undefined;
-  if (!/^\d+\.\d+/.test(trimmed)) return undefined;
+  // Core segments (before any prerelease/build suffix) must all be numeric,
+  // so x-ranges like `1.2.x` or `1.X` never count as an installed version.
+  const core = trimmed.split(/[-+]/, 1)[0] ?? "";
+  const segments = core.split(".");
+  if (segments.length < 2) return undefined;
+  if (!segments.every((segment) => /^\d+$/.test(segment))) return undefined;
   return trimmed;
 }
 

@@ -48,6 +48,8 @@ export async function auditPath(
     force?: boolean;
     commit?: boolean;
     allowMajors?: boolean;
+    refresh?: boolean;
+    noCache?: boolean;
     deps: {
       readFile: (path: string) => string | null;
       readDir: (dir: string) => string[];
@@ -107,6 +109,8 @@ export async function auditPath(
         readFile: deps.readFile,
         run: deps.run,
         runOsv: deps.runOsv,
+        refresh: input.refresh,
+        noCache: input.noCache,
       });
       findings.push(...advisories.findings);
     } catch (error) {
@@ -144,6 +148,7 @@ export async function auditPath(
       if (dirty) applySkippedDirty = true;
     }
   } else {
+    const appliedRoots = new Set<string>();
     if (apply && deps.writeFile && deps.gitStatus) {
       for (const group of groupByGitRoot(pendingApply)) {
         const applied = applySettingsGroup(group, {
@@ -155,11 +160,14 @@ export async function auditPath(
           commit: input.commit ?? false,
         });
         if (applied.skipped === "dirty") applySkippedDirty = true;
+        if (applied.written.length > 0) {
+          appliedRoots.add(group[0]!.project.gitRoot ?? group[0]!.project.root);
+        }
       }
     }
     if (input.applyAdvisories) {
       for (const row of audited) {
-        const dirty = await applyProjectAdvisories(row, input);
+        const dirty = await applyProjectAdvisories(row, input, appliedRoots);
         if (dirty) applySkippedDirty = true;
       }
     }
@@ -190,7 +198,7 @@ async function applyChoice(
     dirty = applyProjectSettings(row, input, appliedRoots) || dirty;
   }
   if (choice === "advisories" || choice === "both") {
-    dirty = (await applyProjectAdvisories(row, input, true)) || dirty;
+    dirty = (await applyProjectAdvisories(row, input, appliedRoots, true)) || dirty;
   }
   return dirty;
 }
@@ -218,11 +226,14 @@ function applyProjectSettings(
 async function applyProjectAdvisories(
   row: AuditedProject,
   input: Parameters<typeof auditPath>[1],
+  appliedRoots: Set<string>,
   allowMajors?: boolean,
 ): Promise<boolean> {
   const { deps } = input;
   const gitRoot = row.project.gitRoot ?? row.project.root;
-  if (deps.gitStatus && !(input.force ?? false) && deps.gitStatus(gitRoot) !== "clean") {
+  // A root we just wrote settings into is dirty by our own doing; still apply.
+  const force = (input.force ?? false) || appliedRoots.has(gitRoot);
+  if (deps.gitStatus && !force && deps.gitStatus(gitRoot) !== "clean") {
     return true;
   }
   await applyAdvisories(row.project, row.findings, {

@@ -127,6 +127,38 @@ test("CLI --preset wins over repo .pmsec.toml preset", async () => {
   expect(result.exitCode).toBe(0);
 });
 
+test("--refresh and --no-cache bypass the lockfile digest cache", async () => {
+  const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
+  const cache = createFsCache(join(cacheDir, "cache-flags"), () => 1_000, 86_400_000);
+  let auditCalls = 0;
+  const depsFor = () => ({
+    stdout: { write: () => undefined },
+    stderr: { write: () => undefined },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: async () => {
+      auditCalls += 1;
+      return { code: 0, stdout: `{"advisories":{}}`, stderr: "" };
+    },
+    which: () => "/usr/bin/npm",
+    cache,
+  });
+
+  await run(["audit", root], depsFor());
+  expect(auditCalls).toBe(1);
+  await run(["audit", root], depsFor());
+  expect(auditCalls).toBe(1);
+
+  await run(["audit", root, "--refresh"], depsFor());
+  expect(auditCalls).toBe(2);
+  await run(["audit", root, "--no-cache"], depsFor());
+  expect(auditCalls).toBe(3);
+
+  // --refresh re-primed the cache; --no-cache must not have written it.
+  await run(["audit", root], depsFor());
+  expect(auditCalls).toBe(3);
+});
+
 test("auditPath critical npm audit JSON is an advisory and exits 1", async () => {
   const fs = memoryFs(CLEAN_NPM_FILES, ["/p/.git"]);
   const result = await auditPath("/p", {

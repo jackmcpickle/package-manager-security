@@ -64,6 +64,8 @@ export async function run(
     force: flags.force,
     commit: flags.commit,
     allowMajors: flags.allowMajors,
+    refresh: flags.refresh,
+    noCache: flags.noCache,
     deps: {
       readFile,
       readDir,
@@ -111,6 +113,8 @@ function parseAuditArgs(args: string[]): {
   force: boolean;
   commit: boolean;
   allowMajors: boolean;
+  refresh: boolean;
+  noCache: boolean;
 } {
   let path: string | undefined;
   let preset: PresetName | undefined;
@@ -124,6 +128,8 @@ function parseAuditArgs(args: string[]): {
   let force = false;
   let commit = false;
   let allowMajors = false;
+  let refresh = false;
+  let noCache = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
@@ -179,7 +185,12 @@ function parseAuditArgs(args: string[]): {
       allowMajors = true;
       continue;
     }
-    if (arg === "--refresh" || arg === "--no-cache") {
+    if (arg === "--refresh") {
+      refresh = true;
+      continue;
+    }
+    if (arg === "--no-cache") {
+      noCache = true;
       continue;
     }
     if (arg === "--report") {
@@ -208,6 +219,8 @@ function parseAuditArgs(args: string[]): {
     force,
     commit,
     allowMajors,
+    refresh,
+    noCache,
   };
 }
 
