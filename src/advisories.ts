@@ -11,8 +11,9 @@ import type {
 export type { AdvisoryResult, PackageAdvisory };
 
 const LIVE_MANAGERS = new Set<PackageManager>(["npm", "pnpm", "yarn", "bun", "uv"]);
+const OSV_MANAGERS = new Set<PackageManager>(["poetry", "pip", "pipenv"]);
 
-export function auditAdvisories(
+export async function auditAdvisories(
   project: Project,
   _policy: Policy,
   deps: {
@@ -24,17 +25,36 @@ export function auditAdvisories(
       argv: string[],
       cwd: string,
     ) => Promise<{ code: number; stdout: string; stderr: string }>;
+    runOsv?: (lockOrRequirements: string) => Promise<Finding[]>;
   },
 ): Promise<AdvisoryResult> {
   void deps.now;
   const primaries = project.managers.filter(
     (m) => m.role === "primary" && LIVE_MANAGERS.has(m.name),
   );
-  if (primaries.length === 0) {
-    return Promise.resolve({ findings: [], fromCache: false, ranLive: false });
+  const python = project.managers.filter(
+    (m) => m.role === "primary" && OSV_MANAGERS.has(m.name),
+  );
+
+  const live =
+    primaries.length === 0
+      ? { findings: [] as Finding[], fromCache: false, ranLive: false }
+      : await runPrimaries(project, primaries, deps);
+
+  if (python.length === 0 || !deps.runOsv) {
+    return live;
   }
 
-  return runPrimaries(project, primaries, deps);
+  const osvFindings: Finding[] = [];
+  for (const manager of python) {
+    const lockOrRequirements = manager.lockfilePath ?? manager.manifestPath;
+    osvFindings.push(...(await deps.runOsv(lockOrRequirements)));
+  }
+  return {
+    findings: [...live.findings, ...osvFindings],
+    fromCache: live.fromCache && osvFindings.length === 0,
+    ranLive: live.ranLive || osvFindings.length > 0,
+  };
 }
 
 async function runPrimaries(

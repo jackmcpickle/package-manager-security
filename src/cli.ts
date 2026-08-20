@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { auditPath } from "./audit";
-import type { ExitCode, PresetName } from "./domain";
+import { auditPath, defaultDigest, type AuditRun } from "./audit";
+import { CACHE_TTL_MS, createFsCache, type Cache } from "./cache";
+import type { ExitCode, Finding, PresetName } from "./domain";
 import { loadPolicy } from "./policy";
 import { formatHuman } from "./report";
 
@@ -12,6 +13,12 @@ export async function run(
     stderr: { write: (s: string) => unknown };
     cwd: string;
     env: Record<string, string | undefined>;
+    run?: AuditRun;
+    runOsv?: (lockOrRequirements: string) => Promise<Finding[]>;
+    which?: (binary: string) => string | null;
+    cache?: Cache;
+    now?: () => number;
+    digest?: (lockfileBytes: string) => string;
   },
 ): Promise<{ exitCode: ExitCode }> {
   const stdout = deps?.stdout ?? process.stdout;
@@ -41,7 +48,8 @@ export async function run(
     flags: flags.preset === undefined ? undefined : { preset: flags.preset },
   });
 
-  const result = auditPath(root, {
+  const now = deps?.now ?? Date.now;
+  const result = await auditPath(root, {
     policy,
     apply: flags.apply,
     applyAdvisories: flags.applyAdvisories,
@@ -52,11 +60,16 @@ export async function run(
       readFile,
       readDir,
       isDir,
-      which: (binary) => Bun.which(binary) ?? null,
+      which: deps?.which ?? ((binary) => Bun.which(binary) ?? null),
+      run: deps?.run ?? defaultRun,
+      runOsv: deps?.runOsv ?? (async () => []),
+      cache: deps?.cache ?? createFsCache(userCachePath(env), now, CACHE_TTL_MS),
+      now,
+      digest: deps?.digest ?? defaultDigest,
     },
   });
 
-  stdout.write(formatHuman(result));
+  stdout.write(flags.json ? `${JSON.stringify(result)}\n` : formatHuman(result));
   return { exitCode: result.exitCode };
 }
 
@@ -67,6 +80,7 @@ function parseAuditArgs(args: string[]): {
   applyAdvisories: boolean;
   interactive: boolean;
   concurrency: number;
+  json: boolean;
 } {
   let path: string | undefined;
   let preset: PresetName | undefined;
@@ -74,6 +88,7 @@ function parseAuditArgs(args: string[]): {
   let applyAdvisories = false;
   let interactive = false;
   let concurrency = 4;
+  let json = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
@@ -109,8 +124,11 @@ function parseAuditArgs(args: string[]): {
       if (Number.isFinite(value) && value >= 1) concurrency = value;
       continue;
     }
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
     if (
-      arg === "--json" ||
       arg === "--sarif" ||
       arg === "--force" ||
       arg === "--commit" ||
@@ -129,13 +147,32 @@ function parseAuditArgs(args: string[]): {
     }
   }
 
-  return { path, preset, apply, applyAdvisories, interactive, concurrency };
+  return { path, preset, apply, applyAdvisories, interactive, concurrency, json };
+}
+
+async function defaultRun(
+  argv: string[],
+  cwd: string,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const proc = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { code, stdout, stderr };
 }
 
 function userConfigPath(env: Record<string, string | undefined>): string {
   const xdg = env.XDG_CONFIG_HOME;
   if (xdg !== undefined && xdg !== "") return join(xdg, "pmsec", "config.toml");
   return join(env.HOME ?? "", ".config", "pmsec", "config.toml");
+}
+
+function userCachePath(env: Record<string, string | undefined>): string {
+  const xdg = env.XDG_CACHE_HOME;
+  if (xdg !== undefined && xdg !== "") return join(xdg, "pmsec");
+  return join(env.HOME ?? "", ".cache", "pmsec");
 }
 
 function isPresetName(value: string | undefined): value is PresetName {

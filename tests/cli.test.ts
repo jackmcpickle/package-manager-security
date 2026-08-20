@@ -1,6 +1,84 @@
-import { expect, test } from "bun:test";
-import { join } from "node:path";
+import { afterAll, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { auditPath } from "../src/audit";
+import { createFsCache } from "../src/cache";
 import { run } from "../src/cli";
+import type { Finding } from "../src/domain";
+import { loadPolicy } from "../src/policy";
+
+const cacheDir = mkdtempSync(join(tmpdir(), "pmsec-task10-cache-"));
+afterAll(() => {
+  rmSync(cacheDir, { recursive: true, force: true });
+});
+
+const CRITICAL_NPM_AUDIT = JSON.stringify({
+  advisories: {
+    "1": {
+      module_name: "left-pad",
+      severity: "critical",
+      github_advisory_id: "GHSA-crit",
+      title: "critical left-pad advisory",
+      findings: [{ version: "1.0.0" }],
+    },
+  },
+});
+
+const CLEAN_NPM_FILES: Record<string, string> = {
+  "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+  "/p/package-lock.json": `{"lockfileVersion":3}`,
+  "/p/.npmrc":
+    "ignore-scripts=true\naudit=true\naudit-level=high\nmin-release-age=7\nregistry=https://registry.npmjs.org/\n",
+};
+
+const POETRY_FILES: Record<string, string> = {
+  "/py/pyproject.toml": `[tool.poetry]\nname = "x"\nversion = "0.1.0"\n`,
+  "/py/poetry.lock": "# poetry lock\n",
+};
+
+function memoryFs(
+  files: Record<string, string>,
+  extraDirs: string[] = [],
+): {
+  readDir: (dir: string) => string[];
+  readFile: (path: string) => string | null;
+  isDir: (path: string) => boolean;
+} {
+  const dirs = new Set<string>(["/", ...extraDirs]);
+  const addDir = (dir: string) => {
+    let current = dir;
+    while (current && current !== "/") {
+      dirs.add(current);
+      current = dirname(current);
+    }
+  };
+  for (const file of Object.keys(files)) addDir(dirname(file));
+  for (const dir of extraDirs) addDir(dir);
+
+  return {
+    readDir(dir: string): string[] {
+      const prefix = dir.endsWith("/") ? dir : `${dir}/`;
+      const names = new Set<string>();
+      for (const path of [...dirs, ...Object.keys(files)]) {
+        if (!path.startsWith(prefix)) continue;
+        const name = path.slice(prefix.length).split("/")[0];
+        if (name) names.add(name);
+      }
+      return [...names];
+    },
+    readFile(path: string): string | null {
+      return files[path] ?? null;
+    },
+    isDir(path: string): boolean {
+      return dirs.has(path);
+    },
+  };
+}
+
+function emptyAuditRun() {
+  return async () => ({ code: 0, stdout: `{"advisories":{}}`, stderr: "" });
+}
 
 test("pmsec with no args prints usage and exits 2", async () => {
   const stdout: string[] = [];
@@ -24,6 +102,9 @@ test("audit of a fixture repo with open npm scripts exits 1 and lists the findin
     stderr: { write: (s: string) => stderr.push(s) },
     cwd: import.meta.dir,
     env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "alpha"), () => 1_000, 86_400_000),
   });
   expect(result.exitCode).toBe(1);
   expect(stdout.join("")).toContain("scripts.unrestricted");
@@ -38,7 +119,120 @@ test("CLI --preset wins over repo .pmsec.toml preset", async () => {
     stderr: { write: (s: string) => stderr.push(s) },
     cwd: import.meta.dir,
     env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: emptyAuditRun(),
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "flag-wins"), () => 1_000, 86_400_000),
   });
   expect(stdout.join("")).not.toContain("scripts.unrestricted");
   expect(result.exitCode).toBe(0);
+});
+
+test("auditPath critical npm audit JSON is an advisory and exits 1", async () => {
+  const fs = memoryFs(CLEAN_NPM_FILES, ["/p/.git"]);
+  const result = await auditPath("/p", {
+    policy: loadPolicy({}),
+    apply: false,
+    applyAdvisories: false,
+    interactive: false,
+    concurrency: 4,
+    deps: {
+      ...fs,
+      which: () => "/usr/bin/npm",
+      run: async () => ({ code: 1, stdout: CRITICAL_NPM_AUDIT, stderr: "" }),
+      cache: createFsCache(cacheDir, () => 1_000, 86_400_000),
+      now: () => 1_000,
+      digest: () => "npm-critical",
+    },
+  });
+  const findings = result.projects.flatMap((row) => row.findings);
+  expect(result.exitCode).toBe(1);
+  expect(findings.some((finding) => finding.kind === "advisory")).toBe(true);
+});
+
+test("auditPath missing binary skips advisories and exits 0 when settings are clean", async () => {
+  const fs = memoryFs(CLEAN_NPM_FILES, ["/p/.git"]);
+  let ran = 0;
+  const result = await auditPath("/p", {
+    policy: loadPolicy({}),
+    apply: false,
+    applyAdvisories: false,
+    interactive: false,
+    concurrency: 4,
+    deps: {
+      ...fs,
+      which: () => null,
+      run: async () => {
+        ran += 1;
+        return { code: 1, stdout: CRITICAL_NPM_AUDIT, stderr: "" };
+      },
+      cache: createFsCache(join(cacheDir, "missing"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+      digest: () => "npm-missing",
+    },
+  });
+  const findings = result.projects.flatMap((row) => row.findings);
+  expect(ran).toBe(0);
+  expect(result.exitCode).toBe(0);
+  expect(findings.some((finding) => finding.code === "pm.missing-binary")).toBe(true);
+  expect(findings.some((finding) => finding.kind === "advisory")).toBe(false);
+});
+
+test("auditPath runOsv high advisory exits 1", async () => {
+  const fs = memoryFs(POETRY_FILES, ["/py/.git"]);
+  const osvFinding: Finding = {
+    kind: "advisory",
+    code: "GHSA-osv",
+    message: "osv high advisory",
+    severity: "high",
+    path: "/py/poetry.lock",
+    fixable: false,
+    manager: "poetry",
+  };
+  const result = await auditPath("/py", {
+    policy: loadPolicy({}),
+    apply: false,
+    applyAdvisories: false,
+    interactive: false,
+    concurrency: 4,
+    deps: {
+      ...fs,
+      which: () => null,
+      run: emptyAuditRun(),
+      runOsv: async () => [osvFinding],
+      cache: createFsCache(join(cacheDir, "osv"), () => 1_000, 86_400_000),
+      now: () => 1_000,
+      digest: () => "poetry-osv",
+    },
+  });
+  const findings = result.projects.flatMap((row) => row.findings);
+  expect(result.exitCode).toBe(1);
+  expect(findings.some((finding) => finding.kind === "advisory" && finding.severity === "high")).toBe(
+    true,
+  );
+});
+
+test("--json prints the full result object with advisory findings", async () => {
+  mkdirSync(join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"), { recursive: true });
+  const root = join(import.meta.dir, "fixtures/discover/many-repos/alpha");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const result = await run(["audit", root, "--json"], {
+    stdout: { write: (s: string) => stdout.push(s) },
+    stderr: { write: (s: string) => stderr.push(s) },
+    cwd: import.meta.dir,
+    env: { HOME: join(import.meta.dir, "fixtures/empty-home") },
+    run: async () => ({ code: 1, stdout: CRITICAL_NPM_AUDIT, stderr: "" }),
+    which: () => "/usr/bin/npm",
+    cache: createFsCache(join(cacheDir, "json"), () => 1_000, 86_400_000),
+  });
+  const parsed = JSON.parse(stdout.join("")) as {
+    exitCode: number;
+    projects: Array<{ findings: Array<{ kind: string }> }>;
+  };
+  expect(result.exitCode).toBe(1);
+  expect(parsed.exitCode).toBe(1);
+  expect(parsed.projects.length).toBeGreaterThan(0);
+  expect(parsed.projects.some((row) => row.findings.some((finding) => finding.kind === "advisory"))).toBe(
+    true,
+  );
 });

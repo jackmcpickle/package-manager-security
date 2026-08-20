@@ -11,12 +11,14 @@ const cacheDir1 = mkdtempSync(join(tmpdir(), "pmsec-test-cache-"));
 const cacheDir2 = mkdtempSync(join(tmpdir(), "pmsec-test-cache2-"));
 const cacheDir3 = mkdtempSync(join(tmpdir(), "pmsec-test-cache3-"));
 const cacheDir4 = mkdtempSync(join(tmpdir(), "pmsec-test-cache4-"));
+const cacheDir5 = mkdtempSync(join(tmpdir(), "pmsec-test-cache5-"));
 
 afterAll(() => {
   rmSync(cacheDir1, { recursive: true, force: true });
   rmSync(cacheDir2, { recursive: true, force: true });
   rmSync(cacheDir3, { recursive: true, force: true });
   rmSync(cacheDir4, { recursive: true, force: true });
+  rmSync(cacheDir5, { recursive: true, force: true });
 });
 
 const project: Project = {
@@ -160,4 +162,43 @@ test("uv json with deprecated and quarantine statuses emits those finding kinds"
   });
   expect(result.findings.some((f) => f.kind === "deprecated")).toBe(true);
   expect(result.findings.some((f) => f.kind === "quarantine")).toBe(true);
+});
+
+test("poetry primary uses runOsv when provided", async () => {
+  const cache = createFsCache(cacheDir5, () => 1_000, 86_400_000);
+  const poetryProject: Project = {
+    root: "/py",
+    gitRoot: "/py",
+    managers: [
+      {
+        name: "poetry",
+        role: "primary",
+        manifestPath: "/py/pyproject.toml",
+        lockfilePath: "/py/poetry.lock",
+        configPath: "/py/pyproject.toml",
+      },
+    ],
+  };
+  const result = await auditAdvisories(poetryProject, loadPolicy({}), {
+    cache,
+    now: () => 1_000,
+    digest: () => "poetry-digest",
+    readFile: () => "lock",
+    run: async () => ({ code: 0, stdout: `{"advisories":{}}`, stderr: "" }),
+    runOsv: async (lockOrRequirements) => {
+      expect(lockOrRequirements).toBe("/py/poetry.lock");
+      return [
+        {
+          kind: "advisory",
+          code: "GHSA-osv",
+          message: "osv high advisory",
+          severity: "high",
+          path: lockOrRequirements,
+          fixable: false,
+          manager: "poetry",
+        },
+      ];
+    },
+  });
+  expect(result.findings.some((f) => f.kind === "advisory" && f.severity === "high")).toBe(true);
 });

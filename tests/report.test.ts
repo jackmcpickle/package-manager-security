@@ -58,3 +58,46 @@ test("formatHuman counts unique git roots as repos scanned", () => {
   });
   expect(text).toContain("repos scanned: 1");
 });
+
+test("formatHuman counts advisories by severity separately from settings", () => {
+  const text = formatHuman({
+    exitCode: 1,
+    projects: [
+      {
+        project: { root: "/p", gitRoot: "/p", managers: [] },
+        findings: [
+          {
+            kind: "settings",
+            code: "scripts.unrestricted",
+            message: "npm ignore-scripts must be true",
+            severity: "high",
+            path: "/p/.npmrc",
+            fixable: true,
+            manager: "npm",
+          },
+          {
+            kind: "advisory",
+            code: "GHSA-x",
+            message: "critical pad",
+            severity: "critical",
+            path: "/p/package-lock.json",
+            fixable: false,
+            manager: "npm",
+          },
+          {
+            kind: "advisory",
+            code: "GHSA-y",
+            message: "high pad",
+            severity: "high",
+            path: "/p/package-lock.json",
+            fixable: false,
+            manager: "npm",
+          },
+        ],
+      },
+    ],
+  });
+  expect(text).toContain("settings findings: 1");
+  expect(text).toMatch(/advisories:.*critical 1/);
+  expect(text).toMatch(/high 1/);
+});

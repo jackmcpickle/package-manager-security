@@ -1,7 +1,11 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { parse } from "smol-toml";
+import { auditAdvisories } from "./advisories";
+import type { Cache } from "./cache";
+import { CACHE_TTL_MS, createFsCache } from "./cache";
 import { discoverProjects } from "./discover";
-import type { ExitCode, Finding, Policy, PresetName, Project, Severity } from "./domain";
+import type { ExitCode, Finding, PackageManager, Policy, PresetName, Project, Severity } from "./domain";
 import { loadPolicy } from "./policy";
 import { preflight } from "./preflight";
 import { auditSettings } from "./settings";
@@ -20,7 +24,17 @@ const GATE_RANK: Record<PresetName, number> = {
   strict: SEVERITY_RANK.moderate,
 };
 
-export function auditPath(
+export type AuditResult = {
+  exitCode: ExitCode;
+  projects: Array<{ project: Project; findings: Finding[] }>;
+};
+
+export type AuditRun = (
+  argv: string[],
+  cwd: string,
+) => Promise<{ code: number; stdout: string; stderr: string }>;
+
+export async function auditPath(
   root: string,
   input: {
     policy: Policy;
@@ -34,10 +48,18 @@ export function auditPath(
       readDir: (dir: string) => string[];
       isDir: (path: string) => boolean;
       which: (binary: string) => string | null;
+      run: AuditRun;
+      runOsv?: (lockOrRequirements: string) => Promise<Finding[]>;
+      cache?: Cache;
+      now?: () => number;
+      digest?: (lockfileBytes: string) => string;
     };
   },
-): { exitCode: ExitCode; projects: Array<{ project: Project; findings: Finding[] }> } {
+): Promise<AuditResult> {
   const { policy, apply, deps, flags } = input;
+  const now = deps.now ?? Date.now;
+  const digest = deps.digest ?? defaultDigest;
+  const cache = deps.cache ?? createFsCache(join(".cache", "pmsec"), now, CACHE_TTL_MS);
   const discovered = discoverProjects(root, {
     readFile: deps.readFile,
     readDir: deps.readDir,
@@ -45,23 +67,52 @@ export function auditPath(
   });
 
   let policyFailure = false;
-  const projects = discovered.map((project) => {
+  let incomplete = false;
+  const projects: AuditResult["projects"] = [];
+
+  for (const project of discovered) {
     const repoToml = deps.readFile(join(project.root, ".pmsec.toml")) ?? undefined;
     const projectPolicy = overlayRepoPolicy(policy, repoToml, flags);
+    const flight = preflight(project, { which: deps.which });
+    const missing = new Set<PackageManager>(flight.missing.map((row) => row.manager));
     const findings = [
       ...auditSettings(project, projectPolicy, { readFile: deps.readFile }),
-      ...preflight(project, { which: deps.which }).warnings,
+      ...flight.warnings,
     ];
+
+    try {
+      const advisoryProject = {
+        ...project,
+        managers: project.managers.filter((manager) => !missing.has(manager.name)),
+      };
+      const advisories = await auditAdvisories(advisoryProject, projectPolicy, {
+        cache,
+        now,
+        digest,
+        readFile: deps.readFile,
+        run: deps.run,
+        runOsv: deps.runOsv,
+      });
+      findings.push(...advisories.findings);
+    } catch (error) {
+      if (isIncomplete(error)) incomplete = true;
+      else throw error;
+    }
+
     const gate = GATE_RANK[projectPolicy.preset];
     if (findings.some((finding) => failsGate(finding, gate))) policyFailure = true;
-    return { project, findings };
-  });
+    projects.push({ project, findings });
+  }
 
   let exitCode: ExitCode = 0;
-  if (projects.length === 0 || apply) exitCode = 2;
+  if (projects.length === 0 || apply || incomplete) exitCode = 2;
   else if (policyFailure) exitCode = 1;
 
   return { exitCode, projects };
+}
+
+export function defaultDigest(lockfileBytes: string): string {
+  return createHash("sha256").update(lockfileBytes).digest("hex");
 }
 
 function overlayRepoPolicy(
@@ -97,6 +148,10 @@ function overlayRepoPolicy(
 function failsGate(finding: Finding, gate: number): boolean {
   if (finding.kind === "missing-binary") return false;
   return SEVERITY_RANK[finding.severity] >= gate;
+}
+
+function isIncomplete(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "incomplete" in error;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

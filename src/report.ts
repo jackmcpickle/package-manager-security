@@ -1,13 +1,21 @@
-import type { auditPath } from "./audit";
+import type { AuditResult } from "./audit";
+import type { Finding, Severity } from "./domain";
 
-export function formatHuman(result: ReturnType<typeof auditPath>): string {
+const ADVISORY_KINDS = new Set(["advisory", "deprecated", "quarantine"]);
+const SEVERITIES: Severity[] = ["critical", "high", "moderate", "low", "info"];
+
+export function formatHuman(result: AuditResult): string {
   const findings = result.projects.flatMap((row) => row.findings);
-  const settingsCount = findings.filter((finding) => finding.kind !== "missing-binary").length;
+  const settingsCount = findings.filter(
+    (finding) => finding.kind !== "missing-binary" && !ADVISORY_KINDS.has(finding.kind),
+  ).length;
   const warningsCount = findings.filter((finding) => finding.kind === "missing-binary").length;
+  const advisoryCounts = countAdvisories(findings);
   const lines = [
     `repos scanned: ${countRepos(result.projects)}`,
     `settings findings: ${settingsCount}`,
     `warnings: ${warningsCount}`,
+    `advisories: ${SEVERITIES.map((severity) => `${severity} ${advisoryCounts[severity]}`).join(", ")}`,
   ];
   for (const { project, findings: projectFindings } of result.projects) {
     lines.push("");
@@ -19,6 +27,20 @@ export function formatHuman(result: ReturnType<typeof auditPath>): string {
   return `${lines.join("\n")}\n`;
 }
 
-function countRepos(projects: ReturnType<typeof auditPath>["projects"]): number {
+function countAdvisories(findings: Finding[]): Record<Severity, number> {
+  const counts: Record<Severity, number> = {
+    critical: 0,
+    high: 0,
+    moderate: 0,
+    low: 0,
+    info: 0,
+  };
+  for (const finding of findings) {
+    if (ADVISORY_KINDS.has(finding.kind)) counts[finding.severity] += 1;
+  }
+  return counts;
+}
+
+function countRepos(projects: AuditResult["projects"]): number {
   return new Set(projects.map(({ project }) => project.gitRoot ?? project.root)).size;
 }
