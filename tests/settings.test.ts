@@ -128,3 +128,28 @@ test("yarn berry without enableScripts false is unrestricted under standard", ()
   });
   expect(findings.some((f) => f.code === "scripts.unrestricted")).toBe(true);
 });
+
+test("malformed yarn packageManager pin is unpinned", () => {
+  const project: Project = {
+    root: "/y",
+    gitRoot: "/y",
+    managers: [
+      {
+        name: "yarn",
+        role: "primary",
+        manifestPath: "/y/package.json",
+        lockfilePath: "/y/yarn.lock",
+        configPath: "/y/.yarnrc.yml",
+      },
+    ],
+  };
+  const files: Record<string, string> = {
+    "/y/package.json": `{"name":"y","packageManager":"yarn@4garbage"}`,
+    "/y/yarn.lock": "# yarn lockfile v1\n",
+    "/y/.yarnrc.yml": `enableScripts: false\nnpmRegistryServer: "https://registry.npmjs.org/"\n`,
+  };
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "pm.unpinned")).toBe(true);
+});

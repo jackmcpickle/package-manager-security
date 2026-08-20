@@ -610,9 +610,12 @@ function packageManagerYarnBerry(raw: string | null): boolean {
     const parsed: unknown = JSON.parse(raw);
     if (!isPlainObject(parsed)) return false;
     const field = parsed.packageManager;
-    if (typeof field !== "string" || !field.startsWith("yarn@")) return false;
-    const major = Number.parseInt(field.slice("yarn@".length), 10);
-    return Number.isFinite(major) && major >= 2;
+    if (typeof field !== "string") return false;
+    const match = field.match(
+      /^yarn@(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/,
+    );
+    if (match === null) return false;
+    return Number(match[1]) >= 2;
   } catch {
     return false;
   }
