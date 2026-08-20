@@ -1,6 +1,6 @@
 # pmsec Testing Plan
 
-> Audit of the current suite (2026-08-20, `feat/pmsec`, 217 tests / 12 files). Waves 1–3 are done. Tests stay at the eight seams in `PLAN.md`. Do not mock our own modules. Inject filesystem, PATH, runners, time, and cache dir.
+> Audit of the current suite (2026-08-20, `feat/pmsec`, 220 tests / 13 files). Waves 1–4 are done. Tests stay at the eight seams in `PLAN.md`. Do not mock our own modules. Inject filesystem, PATH, runners, time, and cache dir.
 
 **Goal:** Every product scenario from the grilling / `PLAN.md` has a named test at exactly one layer. No duplicate coverage across layers.
 
@@ -20,7 +20,7 @@
 
 **Critical path that is already tested:** audit never writes by default; `--apply` writes npm/pnpm correctly; leftover is not fixable; yarn v1 is unsupported; Python not-uv; missing binary does not fail the run; cache TTL + refresh; no major bump; settings+advisories after self-dirty; unique git-root counts; flags beat repo TOML.
 
-**Critical path that is not tested (Wave 4):** coverage ratchet in CI.
+**Critical path that is not tested:** none in this plan. Mutation testing stays out.
 
 ## 2. Recommended pyramid
 
@@ -230,9 +230,9 @@ Preset severity:
 
 Migrate-to-uv is not implemented: interactive poetry does not offer migrate and still uses OSV. Compiled-binary smoke: `bun run build:binary && ./dist/pmsec audit tests/fixtures/discover/many-repos --json`.
 
-### Wave 4 — ratchet (CI, later)
+### Wave 4 — ratchet (done)
 
-`bun test --coverage` in CI; store `.coverage-baseline`; fail on drop. No mutation testing until Wave 1 is green.
+CI runs `bun test --coverage` and `bun run coverage:check`. Bun reports lines and functions, not branches, so the ratchet uses those. Settings and apply stay at an 85% line floor. Raise the committed `.coverage-baseline` with `bun run coverage:write` after coverage goes up.
 
 ## 5. Design rules for new tests
 

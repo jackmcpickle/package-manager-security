@@ -34,6 +34,9 @@
   },
   "scripts": {
     "test": "bun test",
+    "coverage": "bun test --coverage --coverage-reporter=lcov --coverage-reporter=text",
+    "coverage:check": "bun scripts/check-coverage.ts",
+    "coverage:write": "bun scripts/check-coverage.ts --write",
     "typecheck": "tsc --noEmit",
     "build": "bun build ./src/main.ts --target=bun --banner '#!/usr/bin/env bun' --outfile dist/pmsec.js",
     "build:binary": "bun build ./src/main.ts --compile --outfile dist/pmsec",
