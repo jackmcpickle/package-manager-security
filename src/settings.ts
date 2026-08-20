@@ -51,6 +51,10 @@ export function auditSettings(
       continue;
     }
     if (manager.role !== "primary") continue;
+    if (manager.name === "poetry" || manager.name === "pip" || manager.name === "pipenv") {
+      findings.push(notUsingUvFinding(manager));
+      continue;
+    }
     if (!policy.enabledManagers.includes(manager.name)) continue;
 
     if (manager.name === "npm") {
@@ -67,6 +71,18 @@ export function auditSettings(
   }
 
   return findings;
+}
+
+function notUsingUvFinding(manager: DetectedManager): Finding {
+  return {
+    kind: "not-using-uv",
+    code: "python.not-uv",
+    message: `${manager.name} project is not using uv`,
+    severity: "high",
+    path: manager.lockfilePath ?? manager.manifestPath,
+    fixable: false,
+    manager: manager.name,
+  };
 }
 
 function leftoverFinding(manager: DetectedManager): Finding {

@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { discoverProjects } from "../src/discover";
+import { loadPolicy } from "../src/policy";
+import { auditSettings } from "../src/settings";
 
 const FIX = join(import.meta.dir, "fixtures/discover");
 
@@ -10,6 +12,7 @@ for (const rel of [
   "many-repos/beta",
   "monorepo",
   "nested-npmrc",
+  "poetry-app",
 ]) {
   mkdirSync(join(FIX, rel, ".git"), { recursive: true });
 }
@@ -139,6 +142,15 @@ test("standalone uv.toml is not a uv primary", () => {
     }),
   );
   expect(projects.some((p) => p.managers.some((m) => m.name === "uv"))).toBe(false);
+});
+
+test("poetry project is detected and flagged as not using uv", () => {
+  const projects = discoverProjects(join(FIX, "poetry-app"));
+  expect(projects[0]?.managers.some((m) => m.name === "poetry" && m.role === "primary")).toBe(true);
+  const findings = auditSettings(projects[0]!, loadPolicy({}), {
+    readFile: (p) => (p.endsWith("pyproject.toml") ? `[tool.poetry]\nname = "x"\n` : null),
+  });
+  expect(findings.some((f) => f.code === "python.not-uv")).toBe(true);
 });
 
 test("skip directories are not walked for repos or PM roots", () => {

@@ -129,6 +129,33 @@ test("yarn berry without enableScripts false is unrestricted under standard", ()
   expect(findings.some((f) => f.code === "scripts.unrestricted")).toBe(true);
 });
 
+test("poetry primary emits python.not-uv and is not fixable", () => {
+  const project: Project = {
+    root: "/p",
+    gitRoot: "/p",
+    managers: [
+      {
+        name: "poetry",
+        role: "primary",
+        manifestPath: "/p/pyproject.toml",
+        lockfilePath: "/p/poetry.lock",
+        configPath: "/p/pyproject.toml",
+      },
+    ],
+  };
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => (p.endsWith("pyproject.toml") ? `[tool.poetry]\nname = "x"\n` : null),
+  });
+  expect(findings).toEqual([
+    expect.objectContaining({
+      code: "python.not-uv",
+      kind: "not-using-uv",
+      severity: "high",
+      fixable: false,
+    }),
+  ]);
+});
+
 test("malformed yarn packageManager pin is unpinned", () => {
   const project: Project = {
     root: "/y",

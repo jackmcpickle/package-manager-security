@@ -140,11 +140,15 @@ function hasRootPmMarkers(dir: string, fs: Fs): boolean {
     names.has("bun.lockb") ||
     names.has("bunfig.toml") ||
     names.has("uv.lock") ||
-    names.has("uv.toml")
+    names.has("uv.toml") ||
+    names.has("poetry.lock") ||
+    names.has("Pipfile") ||
+    names.has("Pipfile.lock") ||
+    hasRequirementsTxt(names)
   ) {
     return true;
   }
-  return hasToolUv(dir, fs);
+  return hasToolUv(dir, fs) || hasToolPoetry(dir, fs) || hasProjectTable(dir, fs);
 }
 
 function hasNestedConfig(dir: string, fs: Fs): boolean {
@@ -155,6 +159,24 @@ function hasNestedConfig(dir: string, fs: Fs): boolean {
 function hasToolUv(dir: string, fs: Fs): boolean {
   const pyproject = fs.readFile(join(dir, "pyproject.toml"));
   return pyproject !== null && /\[tool\.uv\b/.test(pyproject);
+}
+
+function hasToolPoetry(dir: string, fs: Fs): boolean {
+  const pyproject = fs.readFile(join(dir, "pyproject.toml"));
+  return pyproject !== null && /\[tool\.poetry\b/.test(pyproject);
+}
+
+function hasProjectTable(dir: string, fs: Fs): boolean {
+  const pyproject = fs.readFile(join(dir, "pyproject.toml"));
+  return pyproject !== null && /\[project\b/.test(pyproject);
+}
+
+function hasRequirementsTxt(names: Set<string>): boolean {
+  if (names.has("requirements.txt")) return true;
+  for (const name of names) {
+    if (/^requirements-.+\.txt$/.test(name)) return true;
+  }
+  return false;
 }
 
 function detectManagers(dir: string, fs: Fs): DetectedManager[] {
@@ -175,6 +197,12 @@ function detectManagers(dir: string, fs: Fs): DetectedManager[] {
   if (npm) managers.push(npm);
   const uv = detectUv(dir, names, fs);
   if (uv) managers.push(uv);
+  const poetry = detectPoetry(dir, names, fs, uv !== null);
+  if (poetry) managers.push(poetry);
+  const pipenv = detectPipenv(dir, names, uv !== null);
+  if (pipenv) managers.push(pipenv);
+  const pip = detectPip(dir, names, fs, uv !== null, poetry !== null, pipenv !== null);
+  if (pip) managers.push(pip);
 
   return managers;
 }
@@ -306,6 +334,58 @@ function detectNpm(
     null,
     names.has(".npmrc") ? join(dir, ".npmrc") : null,
   );
+}
+
+function detectPoetry(
+  dir: string,
+  names: Set<string>,
+  fs: Fs,
+  uvPresent: boolean,
+): DetectedManager | null {
+  if (!names.has("poetry.lock") && !hasToolPoetry(dir, fs)) return null;
+  return manager(
+    "poetry",
+    uvPresent ? "leftover" : "primary",
+    join(dir, "pyproject.toml"),
+    names.has("poetry.lock") ? join(dir, "poetry.lock") : null,
+    join(dir, "pyproject.toml"),
+  );
+}
+
+function detectPipenv(
+  dir: string,
+  names: Set<string>,
+  uvPresent: boolean,
+): DetectedManager | null {
+  if (!names.has("Pipfile") && !names.has("Pipfile.lock")) return null;
+  return manager(
+    "pipenv",
+    uvPresent ? "leftover" : "primary",
+    names.has("Pipfile") ? join(dir, "Pipfile") : join(dir, "Pipfile.lock"),
+    names.has("Pipfile.lock") ? join(dir, "Pipfile.lock") : null,
+    names.has("Pipfile") ? join(dir, "Pipfile") : null,
+  );
+}
+
+function detectPip(
+  dir: string,
+  names: Set<string>,
+  fs: Fs,
+  uvPresent: boolean,
+  poetryPresent: boolean,
+  pipenvPresent: boolean,
+): DetectedManager | null {
+  if (uvPresent) return null;
+  const reqs = [...names].filter(
+    (name) => name === "requirements.txt" || /^requirements-.+\.txt$/.test(name),
+  );
+  const fromProject =
+    !poetryPresent && !pipenvPresent && !hasToolUv(dir, fs) && hasProjectTable(dir, fs);
+  if (reqs.length === 0 && !fromProject) return null;
+  const manifest = fromProject
+    ? join(dir, "pyproject.toml")
+    : join(dir, reqs.includes("requirements.txt") ? "requirements.txt" : reqs[0]!);
+  return manager("pip", "primary", manifest, null, null);
 }
 
 function detectUv(dir: string, names: Set<string>, fs: Fs): DetectedManager | null {
