@@ -1,0 +1,74 @@
+preset = "standard"
+ignoreScripts = true
+minReleaseAgeDays = 1
+requireLockfile = true
+requirePmPin = true
+auditLevel = "high"
+
+# Other presets (uncomment one to use):
+# preset = "relaxed"
+# preset = "strict"
+
+# Other audit levels:
+# auditLevel = "critical"
+# auditLevel = "moderate"
+# auditLevel = "low"
+# auditLevel = "info"
+
+# enabledManagers = ["npm", "pnpm", "yarn", "bun", "uv", "bundler", "cargo", "composer"]
+
+# [npm]
+# ignoreScripts = true
+# minReleaseAgeDays = 1
+# requireLockfile = true
+# requirePmPin = true
+# auditLevel = "high"
+
+# [pnpm]
+# ignoreScripts = true
+# minReleaseAgeDays = 1
+# requireLockfile = true
+# requirePmPin = true
+# auditLevel = "high"
+
+# [yarn]
+# ignoreScripts = true
+# minReleaseAgeDays = 1
+# requireLockfile = true
+# requirePmPin = true
+# auditLevel = "high"
+
+# [bun]
+# ignoreScripts = true
+# minReleaseAgeDays = 1
+# requireLockfile = true
+# requirePmPin = true
+# auditLevel = "high"
+
+# [uv]
+# ignoreScripts = true
+# minReleaseAgeDays = 1
+# requireLockfile = true
+# requirePmPin = true
+# auditLevel = "high"
+
+# [bundler]
+# ignoreScripts = true
+# minReleaseAgeDays = 1
+# requireLockfile = true
+# requirePmPin = true
+# auditLevel = "high"
+
+# [cargo]
+# ignoreScripts = true
+# minReleaseAgeDays = 1
+# requireLockfile = true
+# requirePmPin = true
+# auditLevel = "high"
+
+# [composer]
+# ignoreScripts = true
+# minReleaseAgeDays = 1
+# requireLockfile = true
+# requirePmPin = true
+# auditLevel = "high"

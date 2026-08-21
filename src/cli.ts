@@ -1,9 +1,12 @@
 import path from "node:path";
 
-import { APP_NAME, CONFIG_FILE_NAME } from "./app-name";
 import type { ApplyPrompt } from "./apply-advisories";
 import { auditPath } from "./audit";
 import type { AuditMode, AuditResult, WriteDeps } from "./audit";
+import { dirConfigPath, userCachePath, userConfigPath } from "./config-paths";
+import type { ConfigSource } from "./config-sources";
+import { formatConfigSources } from "./config-sources";
+import defaultConfigToml from "./config.default.toml" with { type: "text" };
 import type { ExitCode, PresetName } from "./domain";
 import {
   commandByName,
@@ -74,22 +77,6 @@ const PROMPT_CHOICES: ReadonlySet<string> = new Set([
 ]);
 
 type PromptChoice = "settings" | "advisories" | "both" | "skip";
-
-const baseDir = (xdg: string | undefined, fallback: string): string =>
-  xdg !== undefined && xdg !== "" ? xdg : fallback;
-
-const userConfigPath = (env: Record<string, string | undefined>): string =>
-  path.join(
-    baseDir(env.XDG_CONFIG_HOME, path.join(env.HOME ?? "", ".config")),
-    APP_NAME,
-    "config.toml"
-  );
-
-const userCachePath = (env: Record<string, string | undefined>): string =>
-  path.join(
-    baseDir(env.XDG_CACHE_HOME, path.join(env.HOME ?? "", ".cache")),
-    APP_NAME
-  );
 
 const isPresetName = (value: string | undefined): value is PresetName =>
   value !== undefined && PRESET_NAMES.has(value);
@@ -357,41 +344,52 @@ const writeUsageError = (
   return { exitCode: 2 };
 };
 
+const helpConfigSources = (host: Host): ConfigSource[] => [
+  { kind: "user", path: userConfigPath(host.env) },
+  { kind: "scan", path: dirConfigPath(host.cwd()) },
+];
+
+const withHelpConfig = (text: string, host: Host): string =>
+  `${text}${formatConfigSources(helpConfigSources(host), host.files.readFile)}`;
+
 const helpForCommand = (
   name: string,
   color: boolean,
-  stdout: (s: string) => void,
-  stderr: (s: string) => void
+  host: Host
 ): { exitCode: ExitCode } => {
   const command = commandByName(name);
   if (command === undefined) {
-    return writeUsageError(formatUnknownCommand(name, color), stderr);
+    return writeUsageError(
+      withHelpConfig(formatUnknownCommand(name, color), host),
+      host.stderr
+    );
   }
-  return writeHelp(formatCommandHelp(command, color), stdout);
+  const body = formatCommandHelp(command, color);
+  const text = name === "audit" ? withHelpConfig(body, host) : body;
+  return writeHelp(text, host.stdout);
 };
 
 const dispatchExplicitHelp = (
   head: string,
   rest: string[],
   color: boolean,
-  stdout: (s: string) => void,
-  stderr: (s: string) => void
+  host: Host
 ): { exitCode: ExitCode } => {
   const topic = topicFromHelpArgs(rest);
   if (topic !== undefined) {
-    return helpForCommand(topic, color, stdout, stderr);
+    return helpForCommand(topic, color, host);
   }
   if (head === "help" && rest.some(isHelpFlag)) {
-    return helpForCommand("help", color, stdout, stderr);
+    return helpForCommand("help", color, host);
   }
-  return writeHelp(formatRootHelp(color), stdout);
+  return writeHelp(withHelpConfig(formatRootHelp(color), host), host.stdout);
 };
 
 const dispatchTrailingHelp = (
   head: string,
   rest: string[],
   color: boolean,
-  stdout: (s: string) => void
+  host: Host
 ): { exitCode: ExitCode } | null => {
   if (!rest.some(isHelpFlag)) {
     return null;
@@ -400,20 +398,88 @@ const dispatchTrailingHelp = (
   if (command === undefined) {
     return null;
   }
-  return writeHelp(formatCommandHelp(command, color), stdout);
+  return helpForCommand(head, color, host);
 };
 
 const dispatchHelp = (
   head: string,
   rest: string[],
   color: boolean,
-  stdout: (s: string) => void,
-  stderr: (s: string) => void
+  host: Host
 ): { exitCode: ExitCode } | null => {
   if (head === "help" || isHelpFlag(head)) {
-    return dispatchExplicitHelp(head, rest, color, stdout, stderr);
+    return dispatchExplicitHelp(head, rest, color, host);
   }
-  return dispatchTrailingHelp(head, rest, color, stdout);
+  return dispatchTrailingHelp(head, rest, color, host);
+};
+
+interface InitFlags {
+  force: boolean;
+  local: boolean;
+}
+
+const parseInitArgs = (args: string[]): InitFlags => {
+  const flags: InitFlags = { force: false, local: false };
+  for (const arg of args) {
+    if (arg === "--force") {
+      flags.force = true;
+    }
+    if (arg === "--local") {
+      flags.local = true;
+    }
+  }
+  return flags;
+};
+
+const runInit = (args: string[], host: Host): { exitCode: ExitCode } => {
+  const flags = parseInitArgs(args);
+  const target = flags.local
+    ? dirConfigPath(host.cwd())
+    : userConfigPath(host.env);
+  if (host.files.readFile(target) !== null && !flags.force) {
+    return writeUsageError(
+      `Refusing to overwrite existing file ${target} (use --force)\n`,
+      host.stderr
+    );
+  }
+  host.files.writeFile(target, defaultConfigToml);
+  host.stdout(`${target}\n`);
+  return { exitCode: 0 };
+};
+
+const auditConfigSources = (
+  env: Record<string, string | undefined>,
+  root: string,
+  projectRoots: readonly string[]
+): ConfigSource[] => [
+  { kind: "user", path: userConfigPath(env) },
+  { kind: "scan", path: dirConfigPath(root) },
+  ...projectRoots.map((projectRoot): ConfigSource => ({
+    kind: "repo",
+    path: dirConfigPath(projectRoot),
+  })),
+];
+
+const emitConfigSources = (
+  flags: AuditFlags,
+  result: AuditResult,
+  env: Record<string, string | undefined>,
+  root: string,
+  host: Host
+): void => {
+  const block = formatConfigSources(
+    auditConfigSources(
+      env,
+      root,
+      result.projects.map(({ project }) => project.root)
+    ),
+    host.files.readFile
+  );
+  if (flags.json || flags.sarif) {
+    host.stderr(block);
+    return;
+  }
+  host.stdout(block);
 };
 
 export const run = async (
@@ -425,21 +491,34 @@ export const run = async (
   const color = resolveColor(host);
 
   if (argv.length === 0) {
-    return writeUsageError(formatRootHelp(color), host.stderr);
+    return writeUsageError(
+      withHelpConfig(formatRootHelp(color), host),
+      host.stderr
+    );
   }
 
   const [head, ...rest] = argv;
   if (head === undefined) {
-    return writeUsageError(formatRootHelp(color), host.stderr);
+    return writeUsageError(
+      withHelpConfig(formatRootHelp(color), host),
+      host.stderr
+    );
   }
 
-  const helpResult = dispatchHelp(head, rest, color, host.stdout, host.stderr);
+  const helpResult = dispatchHelp(head, rest, color, host);
   if (helpResult !== null) {
     return helpResult;
   }
 
+  if (head === "init") {
+    return runInit(rest, host);
+  }
+
   if (head !== "audit") {
-    return writeUsageError(formatUnknownCommand(head, color), host.stderr);
+    return writeUsageError(
+      withHelpConfig(formatUnknownCommand(head, color), host),
+      host.stderr
+    );
   }
 
   const flags = parseAuditArgs(rest);
@@ -447,8 +526,7 @@ export const run = async (
 
   const layers: PolicyLayers = {
     flags: presetFlags(flags.preset),
-    scanToml:
-      host.files.readFile(path.join(root, CONFIG_FILE_NAME)) ?? undefined,
+    scanToml: host.files.readFile(dirConfigPath(root)) ?? undefined,
     userToml: host.files.readFile(userConfigPath(env)) ?? undefined,
   };
 
@@ -472,6 +550,7 @@ export const run = async (
     refresh: flags.refresh,
   });
 
+  emitConfigSources(flags, result, env, root, host);
   emitOutput(flags, result, host, cwd, color);
   return { exitCode: result.exitCode };
 };
