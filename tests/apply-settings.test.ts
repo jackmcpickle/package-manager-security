@@ -223,7 +223,7 @@ test("auditPath maps apply skipped dirty to exit 2", async () => {
     },
     force: false,
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   expect(result.exitCode).toBe(2);
 });
@@ -257,7 +257,7 @@ test("auditPath apply on a clean tree writes settings and is not the stub exit 2
     },
     force: false,
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   expect(files["/p/.npmrc"]).toContain("ignore-scripts=true");
   expect(result.exitCode).not.toBe(2);
@@ -312,7 +312,7 @@ test("two npm/pnpm roots sharing a gitRoot both get written without force", asyn
     },
     force: false,
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   expect(files["/repo/a/.npmrc"]).toContain("ignore-scripts=true");
   expect(files["/repo/b/pnpm-workspace.yaml"]).toContain("allowBuilds: {}");
@@ -912,7 +912,7 @@ test("auditPath without --apply never writes", async () => {
     },
     force: false,
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   expect(files["/p/.npmrc"]).toBe(`registry=https://registry.npmjs.org/\n`);
   expect(result.exitCode).toBe(1);

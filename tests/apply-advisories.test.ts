@@ -463,7 +463,7 @@ test("apply-advisories without version maps upgrades from advisory JSON fields",
       which: () => "/usr/bin/npm",
     },
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   const finding = result.projects[0]?.findings.find(
     (row) => row.kind === "advisory"
@@ -527,7 +527,7 @@ test("--apply --apply-advisories still applies advisories after the settings wri
     },
     force: false,
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   expect(files["/p/.npmrc"]).toContain("ignore-scripts=true");
   expect(ran).toContainEqual([
@@ -575,7 +575,7 @@ test("interactive both applies advisories after the settings write dirties the t
     },
     force: false,
     interactive: true,
-    policy: loadPolicy({}),
+    layers: {},
   });
   expect(files["/p/.npmrc"]).toContain("ignore-scripts=true");
   expect(ran).toContainEqual([
@@ -630,7 +630,7 @@ test("interactive advisories choice allows a major upgrade", async () => {
       which: () => "/usr/bin/npm",
     },
     interactive: true,
-    policy: loadPolicy({}),
+    layers: {},
   });
   expect(ran).toContainEqual([
     "npm",
@@ -698,7 +698,7 @@ test("audit concurrency pools advisory runs and keeps apply serial", async () =>
       which: () => "/usr/bin/npm",
     },
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   expect(result.projects).toHaveLength(3);
   expect(maxAudit).toBeGreaterThan(1);

@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 
-import { parse } from "smol-toml";
-
 import { auditAdvisories } from "./advisories";
 import { APP_NAME, CONFIG_FILE_NAME } from "./app-name";
 import { applyAdvisories } from "./apply-advisories";
@@ -21,7 +19,8 @@ import type {
   Project,
   Severity,
 } from "./domain";
-import { loadPolicy } from "./policy";
+import { policyForRepo } from "./policy";
+import type { PolicyLayers } from "./policy";
 import { preflight } from "./preflight";
 import { auditSettings } from "./settings";
 
@@ -51,12 +50,11 @@ export type AuditRun = (
 ) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 export interface AuditPathInput {
-  policy: Policy;
+  layers: PolicyLayers;
   apply: boolean;
   applyAdvisories: boolean;
   interactive: boolean;
   concurrency: number;
-  flags?: { preset?: PresetName; overrides?: Record<string, unknown> };
   force?: boolean;
   commit?: boolean;
   allowMajors?: boolean;
@@ -87,9 +85,6 @@ interface AuditedProject {
   projectPolicy: Policy;
   advisoryIncomplete: boolean;
 }
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isIncomplete = (error: unknown): boolean =>
   typeof error === "object" && error !== null && "incomplete" in error;
@@ -127,55 +122,6 @@ const versionsFromFindings = (
 
 export const defaultDigest = (lockfileBytes: string): string =>
   createHash("sha256").update(lockfileBytes).digest("hex");
-
-const parseRepoKeys = (repoToml: string): Record<string, unknown> => {
-  try {
-    const parsed: unknown = parse(repoToml);
-    return isPlainObject(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-};
-
-const mergePerManager = (
-  base: Policy["perManager"],
-  repo: Policy["perManager"],
-  flagOverrides: Record<string, unknown>
-): Policy["perManager"] => {
-  const perManager: Policy["perManager"] = { ...base };
-  for (const [name, table] of Object.entries(repo)) {
-    const key = name as keyof Policy["perManager"];
-    perManager[key] = { ...perManager[key], ...table, ...flagOverrides };
-  }
-  return perManager;
-};
-
-const overlayRepoPolicy = (
-  base: Policy,
-  repoToml: string | undefined,
-  flags?: { preset?: PresetName; overrides?: Record<string, unknown> }
-): Policy => {
-  if (repoToml === undefined) {
-    return base;
-  }
-  const repo = loadPolicy({ repoToml });
-  const keys = parseRepoKeys(repoToml);
-  const flagOverrides = flags?.overrides ?? {};
-  return {
-    enabledManagers: Array.isArray(keys.enabledManagers)
-      ? repo.enabledManagers
-      : base.enabledManagers,
-    overrides: { ...base.overrides, ...repo.overrides, ...flagOverrides },
-    perManager: mergePerManager(
-      base.perManager,
-      repo.perManager,
-      flagOverrides
-    ),
-    preset:
-      flags?.preset ??
-      (typeof keys.preset === "string" ? repo.preset : base.preset),
-  };
-};
 
 const groupByGitRoot = (items: ApplySettingsItem[]): ApplySettingsItem[][] => {
   const groups = new Map<string, ApplySettingsItem[]>();
@@ -361,7 +307,7 @@ const auditOneProject = async (
 ): Promise<AuditedProject> => {
   const repoToml =
     input.deps.readFile(path.join(project.root, CONFIG_FILE_NAME)) ?? undefined;
-  const projectPolicy = overlayRepoPolicy(input.policy, repoToml, input.flags);
+  const projectPolicy = policyForRepo(input.layers, repoToml);
   const flight = preflight(project, { which: input.deps.which });
   const missing = new Set<PackageManager>(
     flight.missing.map((row) => row.manager)

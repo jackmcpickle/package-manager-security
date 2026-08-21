@@ -148,7 +148,7 @@ test("auditPath critical npm audit JSON is an advisory and exits 1", async () =>
       which: () => "/usr/bin/npm",
     },
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   const findings = result.projects.flatMap((row) => row.findings);
   expect(result.exitCode).toBe(1);
@@ -174,7 +174,7 @@ test("auditPath missing binary skips advisories and exits 0 when settings are cl
       which: () => null,
     },
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   const findings = result.projects.flatMap((row) => row.findings);
   expect(ran).toBe(0);
@@ -210,7 +210,7 @@ test("auditPath runOsv high advisory exits 1", async () => {
       which: () => null,
     },
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   const findings = result.projects.flatMap((row) => row.findings);
   expect(result.exitCode).toBe(1);
@@ -420,7 +420,7 @@ test("auditPath advisory runner dying yields exit code 2 (incomplete)", async ()
       which: () => "/usr/bin/npm",
     },
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   expect(result.exitCode).toBe(2);
 });
@@ -451,7 +451,7 @@ test("auditPath below-gate advisory does not fail the standard preset gate", asy
       which: () => "/usr/bin/npm",
     },
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   const findings = result.projects.flatMap((row) => row.findings);
   expect(
@@ -603,7 +603,7 @@ test("info-only settings findings do not fail the standard gate", async () => {
       which: () => "/usr/bin/npm",
     },
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   const findings = result.projects.flatMap((row) => row.findings);
   expect(
@@ -633,7 +633,7 @@ test("standard lists a moderate advisory but does not fail; strict does", async 
       which: () => "/usr/bin/npm",
     },
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   expect(
     standard.projects
@@ -655,7 +655,7 @@ test("standard lists a moderate advisory but does not fail; strict does", async 
       which: () => "/usr/bin/npm",
     },
     interactive: false,
-    policy: loadPolicy({ flags: { preset: "strict" } }),
+    layers: { flags: { preset: "strict" } },
   });
   expect(strict.exitCode).toBe(1);
 });
@@ -675,7 +675,7 @@ test("relaxed fails only critical advisories; a high advisory is listed and exit
       which: () => "/usr/bin/npm",
     },
     interactive: false,
-    policy: loadPolicy({ flags: { preset: "relaxed" } }),
+    layers: { flags: { preset: "relaxed" } },
   });
   expect(
     result.projects
@@ -706,7 +706,7 @@ test("uv deprecation fails even under the relaxed preset", async () => {
       which: (binary) => (binary === "uv" ? "/usr/bin/uv" : null),
     },
     interactive: false,
-    policy: loadPolicy({ flags: { preset: "relaxed" } }),
+    layers: { flags: { preset: "relaxed" } },
   });
   expect(
     result.projects
@@ -1024,7 +1024,7 @@ test("two primaries with one missing binary still audit the other", async () => 
       which: (binary) => (binary === "uv" ? "/usr/bin/uv" : null),
     },
     interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
   });
   const findings = result.projects.flatMap((row) => row.findings);
   expect(

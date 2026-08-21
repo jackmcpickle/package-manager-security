@@ -176,3 +176,51 @@ export const loadPolicy = (input: {
     preset: state.preset,
   };
 };
+
+export interface PolicyLayers {
+  userToml?: string;
+  scanToml?: string;
+  flags?: { preset?: PresetName; overrides?: Record<string, unknown> };
+}
+
+/** Full stack for one repo: user < scan < repo < flags. One parse, one merge. */
+export const policyForRepo = (
+  layers: PolicyLayers,
+  repoToml?: string
+): Policy => loadPolicy({ ...layers, repoToml });
+
+export interface ResolvedSettings {
+  auditLevel: string;
+  ignoreScripts: boolean;
+  minReleaseAgeDays: number;
+  requireLockfile: boolean;
+  requirePmPin: boolean;
+}
+
+export const resolveSettings = (
+  policy: Policy,
+  manager: PackageManager
+): ResolvedSettings => {
+  const base = PRESET_DEFAULTS[policy.preset];
+  const extra = { ...policy.overrides, ...policy.perManager[manager] };
+  return {
+    auditLevel:
+      typeof extra.auditLevel === "string" ? extra.auditLevel : base.auditLevel,
+    ignoreScripts:
+      typeof extra.ignoreScripts === "boolean"
+        ? extra.ignoreScripts
+        : base.ignoreScripts,
+    minReleaseAgeDays:
+      typeof extra.minReleaseAgeDays === "number"
+        ? extra.minReleaseAgeDays
+        : base.minReleaseAgeDays,
+    requireLockfile:
+      typeof extra.requireLockfile === "boolean"
+        ? extra.requireLockfile
+        : base.requireLockfile,
+    requirePmPin:
+      typeof extra.requirePmPin === "boolean"
+        ? extra.requirePmPin
+        : base.requirePmPin,
+  };
+};

@@ -18,21 +18,14 @@ import type {
   Severity,
 } from "./domain";
 import { profileFor } from "./managers/profile";
-import { PRESET_DEFAULTS } from "./policy";
+import { resolveSettings } from "./policy";
+import type { ResolvedSettings } from "./policy";
 
 export interface SettingsFs {
   readFile?: (path: string) => string | null;
 }
 
 type ReadFile = (path: string) => string | null;
-
-interface ResolvedSettings {
-  ignoreScripts: boolean;
-  minReleaseAgeDays: number;
-  auditLevel: string;
-  requireLockfile: boolean;
-  requirePmPin: boolean;
-}
 
 interface ManagerVersion {
   major: number;
@@ -276,34 +269,6 @@ const notUsingUvFinding = (manager: DetectedManager): Finding => ({
   path: manager.lockfilePath ?? manager.manifestPath,
   severity: "high",
 });
-
-const resolveSettings = (
-  policy: Policy,
-  name: PackageManager
-): ResolvedSettings => {
-  const base = PRESET_DEFAULTS[policy.preset];
-  const extra = { ...policy.overrides, ...policy.perManager[name] };
-  return {
-    auditLevel:
-      typeof extra.auditLevel === "string" ? extra.auditLevel : base.auditLevel,
-    ignoreScripts:
-      typeof extra.ignoreScripts === "boolean"
-        ? extra.ignoreScripts
-        : base.ignoreScripts,
-    minReleaseAgeDays:
-      typeof extra.minReleaseAgeDays === "number"
-        ? extra.minReleaseAgeDays
-        : base.minReleaseAgeDays,
-    requireLockfile:
-      typeof extra.requireLockfile === "boolean"
-        ? extra.requireLockfile
-        : base.requireLockfile,
-    requirePmPin:
-      typeof extra.requirePmPin === "boolean"
-        ? extra.requirePmPin
-        : base.requirePmPin,
-  };
-};
 
 const joinRoot = (root: string, name: string): string =>
   root.endsWith("/") ? `${root}${name}` : `${root}/${name}`;

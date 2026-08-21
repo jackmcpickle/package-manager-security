@@ -14,7 +14,7 @@ import type { AuditResult, AuditRun } from "./audit";
 import { CACHE_TTL_MS, createFsCache } from "./cache";
 import type { Cache } from "./cache";
 import type { ExitCode, Finding, PresetName } from "./domain";
-import { loadPolicy } from "./policy";
+import type { PolicyLayers } from "./policy";
 import {
   formatApplySkipped,
   formatHuman,
@@ -496,11 +496,11 @@ export const run = async (
   const flags = parseAuditArgs(argv.slice(1));
   const root = resolveRoot(flags.path, cwd);
 
-  const policy = loadPolicy({
+  const layers: PolicyLayers = {
     flags: presetFlags(flags.preset),
     scanToml: readFile(path.join(root, CONFIG_FILE_NAME)) ?? undefined,
     userToml: readFile(userConfigPath(env)) ?? undefined,
-  });
+  };
 
   const now = deps?.now ?? Date.now;
   const write = deps?.writeFile ?? writeFile;
@@ -518,11 +518,10 @@ export const run = async (
       write,
       now
     ),
-    flags: presetFlags(flags.preset),
     force: flags.force,
     interactive: flags.interactive,
+    layers,
     noCache: flags.noCache,
-    policy,
     refresh: flags.refresh,
   });
 
