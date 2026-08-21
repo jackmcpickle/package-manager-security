@@ -1228,6 +1228,24 @@ test("init --force overwrites an existing file", async () => {
   rmSync(xdg, { force: true, recursive: true });
 });
 
+test("init rejects an unknown flag and does not write", async () => {
+  const xdg = mkdtempSync(nodePath.join(tmpdir(), "mailclad-init-unknown-"));
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const target = nodePath.join(xdg, "mailclad", "config.toml");
+  const result = await run(
+    ["init", "--focre"],
+    capturingHost(stdout, stderr, {
+      cwd: () => xdg,
+      env: { HOME: xdg, XDG_CONFIG_HOME: xdg },
+    })
+  );
+  expect(result.exitCode).toBe(2);
+  expect(stderr.join("")).toContain("--focre");
+  expect(existsSync(target)).toBe(false);
+  rmSync(xdg, { force: true, recursive: true });
+});
+
 test("init --local --force overwrites cwd .mailclad.toml", async () => {
   const cwd = mkdtempSync(
     nodePath.join(tmpdir(), "mailclad-init-local-force-")

@@ -418,21 +418,38 @@ interface InitFlags {
   local: boolean;
 }
 
-const parseInitArgs = (args: string[]): InitFlags => {
+type InitParse =
+  | { ok: true; flags: InitFlags }
+  | { ok: false; unknown: string };
+
+const applyInitFlag = (flags: InitFlags, arg: string): boolean => {
+  if (arg === "--force") {
+    flags.force = true;
+    return true;
+  }
+  if (arg === "--local") {
+    flags.local = true;
+    return true;
+  }
+  return false;
+};
+
+const parseInitArgs = (args: string[]): InitParse => {
   const flags: InitFlags = { force: false, local: false };
   for (const arg of args) {
-    if (arg === "--force") {
-      flags.force = true;
-    }
-    if (arg === "--local") {
-      flags.local = true;
+    if (!applyInitFlag(flags, arg)) {
+      return { ok: false, unknown: arg };
     }
   }
-  return flags;
+  return { flags, ok: true };
 };
 
 const runInit = (args: string[], host: Host): { exitCode: ExitCode } => {
-  const flags = parseInitArgs(args);
+  const parsed = parseInitArgs(args);
+  if (!parsed.ok) {
+    return writeUsageError(`Unknown option: ${parsed.unknown}\n`, host.stderr);
+  }
+  const { flags } = parsed;
   const target = flags.local
     ? dirConfigPath(host.cwd())
     : userConfigPath(host.env);
