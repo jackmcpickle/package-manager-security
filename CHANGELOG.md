@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [0.1.5](https://github.com/jackmcpickle/package-manager-security/compare/v0.1.4...v0.1.5) (2026-08-21)
+
+### Features
+
+* report config sources and add mailclad init ([#7](https://github.com/jackmcpickle/package-manager-security/issues/7)) ([ab04913](https://github.com/jackmcpickle/package-manager-security/commit/ab04913108deec243d2b9ce381639420b743e394))
 ## [0.1.4](https://github.com/jackmcpickle/package-manager-security/compare/v0.1.3...v0.1.4) (2026-08-21)
 
 ### Bug Fixes
