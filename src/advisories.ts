@@ -11,8 +11,6 @@ import { profileFor } from "./managers/profile";
 
 export type { AdvisoryResult, PackageAdvisory } from "./cache";
 
-const OSV_MANAGERS = new Set<PackageManager>(["poetry", "pip", "pipenv"]);
-
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -820,7 +818,8 @@ const isLivePrimary = (
   enabled.includes(manager.name);
 
 const isOsvPrimary = (manager: Project["managers"][number]): boolean =>
-  manager.role === "primary" && OSV_MANAGERS.has(manager.name);
+  manager.role === "primary" &&
+  profileFor(manager.name).kind === "python-legacy";
 
 const emptyLive = (): AdvisoryResult => ({
   findings: [],

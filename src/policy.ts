@@ -1,7 +1,7 @@
 import { parse } from "smol-toml";
 
 import type { PackageManager, Policy, PresetName } from "./domain";
-import { CONFIG_MANAGER_NAMES } from "./managers/profile";
+import { ALL_MANAGER_NAMES, CONFIG_MANAGER_NAMES } from "./managers/profile";
 
 export const PRESET_DEFAULTS = {
   relaxed: {
@@ -29,12 +29,7 @@ export const PRESET_DEFAULTS = {
 
 const CONFIG_MANAGERS = new Set<string>(CONFIG_MANAGER_NAMES);
 
-const PACKAGE_MANAGERS = new Set<string>([
-  ...CONFIG_MANAGERS,
-  "poetry",
-  "pip",
-  "pipenv",
-]);
+const PACKAGE_MANAGERS = new Set<string>(ALL_MANAGER_NAMES);
 
 const RESERVED_KEYS = new Set(["preset", "enabledManagers"]);
 

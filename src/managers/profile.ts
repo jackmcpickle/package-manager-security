@@ -58,3 +58,11 @@ export const CONFIG_MANAGER_NAMES: readonly PackageManager[] = [
   "cargo",
   "composer",
 ];
+
+/** all 11 manager names: config managers first, then python-legacy, derived from the registry */
+export const ALL_MANAGER_NAMES: readonly PackageManager[] = [
+  ...CONFIG_MANAGER_NAMES,
+  ...(Object.keys(REGISTRY) as PackageManager[]).filter(
+    (name) => profileFor(name).kind === "python-legacy"
+  ),
+];
