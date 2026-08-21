@@ -1,10 +1,33 @@
 # pmguard
 
-Audits package-manager security settings and advisories across monorepos and folders of many projects. It never writes anything unless you pass an apply flag.
+pmguard walks a folder of repos, finds each package-manager root, and audits it. It does not write files unless you pass an apply flag.
 
-Works with npm, pnpm, yarn (Berry), bun, uv, cargo, bundler, and composer. Yarn v1 and non-uv Python projects (Poetry, pip, Pipenv) get flagged but not fixed.
+npm, pnpm, yarn Berry, bun, uv, cargo, bundler, and composer all go through the same path. Yarn v1 and Poetry, pip, or Pipenv projects get flagged. They do not get a live audit.
 
-Not the same as the npm package [`pmguard`](https://www.npmjs.com/package/pmguard), which hardens your global tool configs; this CLI audits per-project settings and lockfiles.
+This CLI is not the npm package [`pmguard`](https://www.npmjs.com/package/pmguard) that edits global tool configs. This one reads per-project settings and lockfiles.
+
+## How an audit runs
+
+Each project gets a binary check, a settings read, then a vulnerability scan if the binary is there. Settings never call the package manager. The scan does.
+
+```mermaid
+flowchart TD
+  discover[Discover PM roots]
+  preflight[Check binary on PATH]
+  settings[Read settings files]
+  skip[Skip live audit]
+  live[Run native audit]
+  discover --> preflight
+  discover --> settings
+  preflight -->|missing| skip
+  preflight -->|found| live
+```
+
+Discovery finds the roots. Preflight looks for `npm`, `pnpm`, `yarn`, `bun`, `uv`, `cargo`, `bundle-audit`, or `composer` on `PATH`. Settings then read that manager's committed config file.
+
+A missing binary does not skip settings. You still get the file findings plus a `pm.missing-binary` warning. Only that manager's live `audit` command is skipped.
+
+Leftover lockfiles and Poetry, pip, or Pipenv never need a binary for this step.
 
 ## Install
 
