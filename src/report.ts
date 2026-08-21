@@ -54,8 +54,19 @@ const countAdvisories = (findings: Finding[]): Record<Severity, number> => {
 const countRepos = (projects: AuditResult["projects"]): number =>
   new Set(projects.map(({ project }) => project.gitRoot ?? project.root)).size;
 
+const withoutFix = (finding: Finding): Finding => {
+  const { fix: _fix, ...rest } = finding;
+  return rest;
+};
+
 export const formatJson = (result: AuditResult): string =>
-  `${JSON.stringify(result)}\n`;
+  `${JSON.stringify({
+    ...result,
+    projects: result.projects.map((row) => ({
+      ...row,
+      findings: row.findings.map(withoutFix),
+    })),
+  })}\n`;
 
 export const formatMarkdown = (result: AuditResult): string => {
   const lines = [`# ${APP_NAME} report`, ""];

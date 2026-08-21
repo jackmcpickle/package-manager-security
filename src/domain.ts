@@ -46,7 +46,7 @@ export type ConfigEditValue =
   | number
   | boolean
   | readonly string[]
-  | Readonly<Record<string, string | number | boolean>>;
+  | Readonly<Record<string, unknown>>;
 
 export type ConfigEdit =
   | { op: "set"; key: string; value: ConfigEditValue }

@@ -607,6 +607,32 @@ test("uv malware-check in uv.toml is honored", () => {
 
 // --- apply ------------------------------------------------------------------
 
+test("apply keeps existing allowBuilds entries of any type and does not overwrite them", () => {
+  const files = pnpmFiles(
+    "11.7.0",
+    "minimumReleaseAge: 1440\ndangerouslyAllowAllBuilds: true\nallowBuilds:\n  esbuild: yes\nonlyBuiltDependencies:\n  - esbuild\n  - core-js\n"
+  );
+  const target = project("pnpm");
+  const findings = auditSettings(target, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "scripts.unrestricted")).toBe(true);
+  applySettings(target, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  const written = files["/p/pnpm-workspace.yaml"] ?? "";
+  expect(written).toContain("esbuild: yes");
+  expect(written).toContain("core-js: true");
+  expect(written).not.toContain("esbuild: true");
+  expect(written).not.toContain("onlyBuiltDependencies");
+});
+
 test("apply migrates the pnpm legacy build allowlist into allowBuilds", () => {
   const files = pnpmFiles(
     "11.7.0",

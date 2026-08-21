@@ -338,15 +338,10 @@ const presentLegacyBuildKeys = (
 
 const migratedAllowBuilds = (
   yaml: Record<string, unknown>
-): Record<string, boolean> => {
-  const allowBuilds: Record<string, boolean> = {};
-  if (isPlainObject(yaml.allowBuilds)) {
-    for (const [name, allowed] of Object.entries(yaml.allowBuilds)) {
-      if (typeof allowed === "boolean") {
-        allowBuilds[name] = allowed;
-      }
-    }
-  }
+): Record<string, unknown> => {
+  const allowBuilds: Record<string, unknown> = isPlainObject(yaml.allowBuilds)
+    ? { ...yaml.allowBuilds }
+    : {};
   const merge = (list: unknown, allowed: boolean): void => {
     if (!Array.isArray(list)) {
       return;
