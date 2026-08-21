@@ -1,13 +1,17 @@
 {
   "name": "pmguard",
   "version": "0.1.0",
-  "description": "Audit package-manager security settings and advisories across monorepos and folders of projects. Supports npm, pnpm, yarn, bun, and uv.",
+  "description": "Audit package-manager security settings and advisories across monorepos and folders of projects. Supports npm, pnpm, yarn, bun, uv, cargo, and bundler.",
   "keywords": [
     "audit",
     "bun",
+    "bundler",
+    "cargo",
     "cli",
     "npm",
     "pnpm",
+    "ruby",
+    "rust",
     "security",
     "supply-chain",
     "uv",

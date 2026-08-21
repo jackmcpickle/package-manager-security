@@ -560,10 +560,8 @@ const mergeUv = (
   return `${stringifyToml(table).trimEnd()}\n`;
 };
 
+/** Only called for a positive `days`; the min-age fix is skipped at or below 0. */
 const cargoDuration = (days: number): string => {
-  if (days <= 0) {
-    return "0d";
-  }
   if (days % 7 === 0) {
     return `${days / 7}w`;
   }

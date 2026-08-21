@@ -1,20 +1,20 @@
 {
-  "lines": {
-    "hit": 2719,
-    "total": 2875
-  },
   "functions": {
-    "hit": 228,
-    "total": 240
+    "hit": 475,
+    "total": 491
   },
   "groups": {
-    "settings": {
-      "hit": 855,
-      "total": 879
-    },
     "apply": {
-      "hit": 396,
-      "total": 432
+      "hit": 895,
+      "total": 936
+    },
+    "settings": {
+      "hit": 1530,
+      "total": 1576
     }
+  },
+  "lines": {
+    "hit": 4873,
+    "total": 5079
   }
 }

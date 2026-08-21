@@ -5,55 +5,9 @@ import path from "node:path";
 import { discoverProjects } from "../src/discover";
 import { loadPolicy } from "../src/policy";
 import { auditSettings } from "../src/settings";
+import { memoryFs } from "./helpers/memory-fs";
 
 const FIX = path.join(import.meta.dir, "fixtures/discover");
-
-const memoryFs = (
-  files: Record<string, string>,
-  extraDirs: string[] = []
-): {
-  isDir: (filePath: string) => boolean;
-  readDir: (dir: string) => string[];
-  readFile: (filePath: string) => string | null;
-} => {
-  const dirs = new Set<string>(["/", ...extraDirs]);
-  const addDir = (dir: string) => {
-    let current = dir;
-    while (current && current !== "/") {
-      dirs.add(current);
-      current = path.dirname(current);
-    }
-  };
-  for (const file of Object.keys(files)) {
-    addDir(path.dirname(file));
-  }
-  for (const dir of extraDirs) {
-    addDir(dir);
-  }
-
-  return {
-    isDir(filePath: string): boolean {
-      return dirs.has(filePath);
-    },
-    readDir(dir: string): string[] {
-      const prefix = dir.endsWith("/") ? dir : `${dir}/`;
-      const names = new Set<string>();
-      for (const entry of [...dirs, ...Object.keys(files)]) {
-        if (!entry.startsWith(prefix)) {
-          continue;
-        }
-        const [name] = entry.slice(prefix.length).split("/");
-        if (name) {
-          names.add(name);
-        }
-      }
-      return [...names];
-    },
-    readFile(filePath: string): string | null {
-      return files[filePath] ?? null;
-    },
-  };
-};
 
 for (const rel of [
   "many-repos/alpha",

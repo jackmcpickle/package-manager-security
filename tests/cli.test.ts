@@ -16,6 +16,7 @@ import { createFsCache } from "../src/cache";
 import { createLineReader, run } from "../src/cli";
 import type { DetectedManager, Finding, Project } from "../src/domain";
 import { loadPolicy } from "../src/policy";
+import { memoryFs } from "./helpers/memory-fs";
 
 const cacheDir = mkdtempSync(nodePath.join(tmpdir(), "pmguard-task10-cache-"));
 afterAll(() => {
@@ -44,53 +45,6 @@ const CLEAN_NPM_FILES: Record<string, string> = {
 const POETRY_FILES: Record<string, string> = {
   "/py/poetry.lock": "# poetry lock\n",
   "/py/pyproject.toml": `[tool.poetry]\nname = "x"\nversion = "0.1.0"\n`,
-};
-
-const memoryFs = (
-  files: Record<string, string>,
-  extraDirs: string[] = []
-): {
-  isDir: (filePath: string) => boolean;
-  readDir: (dir: string) => string[];
-  readFile: (filePath: string) => string | null;
-} => {
-  const dirs = new Set<string>(["/", ...extraDirs]);
-  const addDir = (dir: string) => {
-    let current = dir;
-    while (current && current !== "/") {
-      dirs.add(current);
-      current = nodePath.dirname(current);
-    }
-  };
-  for (const file of Object.keys(files)) {
-    addDir(nodePath.dirname(file));
-  }
-  for (const dir of extraDirs) {
-    addDir(dir);
-  }
-
-  return {
-    isDir(filePath: string): boolean {
-      return dirs.has(filePath);
-    },
-    readDir(dir: string): string[] {
-      const prefix = dir.endsWith("/") ? dir : `${dir}/`;
-      const names = new Set<string>();
-      for (const entry of [...dirs, ...Object.keys(files)]) {
-        if (!entry.startsWith(prefix)) {
-          continue;
-        }
-        const [name] = entry.slice(prefix.length).split("/");
-        if (name) {
-          names.add(name);
-        }
-      }
-      return [...names];
-    },
-    readFile(filePath: string): string | null {
-      return files[filePath] ?? null;
-    },
-  };
 };
 
 const emptyAuditRun = () => () => ({
