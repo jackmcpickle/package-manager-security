@@ -64,6 +64,6 @@
     "bun": ">=1.2.0"
   },
   "commit-and-tag-version": {
-    "releaseCommitMessageFormat": "chore(release): {{currentTag}} [skip ci]"
+    "releaseCommitMessageFormat": "chore(release): {{currentTag}} [skip publish]"
   }
 }
