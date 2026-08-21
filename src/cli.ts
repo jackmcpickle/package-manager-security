@@ -499,55 +499,20 @@ const emitConfigSources = (
   host.stdout(block);
 };
 
-export const run = async (
-  argv: string[],
-  host: Host
+const runAudit = async (
+  rest: string[],
+  host: Host,
+  cwd: string,
+  env: Record<string, string | undefined>,
+  color: boolean
 ): Promise<{ exitCode: ExitCode }> => {
-  const cwd = host.cwd();
-  const { env } = host;
-  const color = resolveColor(host);
-
-  if (argv.length === 0) {
-    return writeUsageError(
-      withHelpConfig(formatRootHelp(color), host),
-      host.stderr
-    );
-  }
-
-  const [head, ...rest] = argv;
-  if (head === undefined) {
-    return writeUsageError(
-      withHelpConfig(formatRootHelp(color), host),
-      host.stderr
-    );
-  }
-
-  const helpResult = dispatchHelp(head, rest, color, host);
-  if (helpResult !== null) {
-    return helpResult;
-  }
-
-  if (head === "init") {
-    return runInit(rest, host);
-  }
-
-  if (head !== "audit") {
-    return writeUsageError(
-      withHelpConfig(formatUnknownCommand(head, color), host),
-      host.stderr
-    );
-  }
-
   const flags = parseAuditArgs(rest);
   const root = resolveRoot(flags.path, cwd);
-
   const layers: PolicyLayers = {
     flags: presetFlags(flags.preset),
     scanToml: host.files.readFile(dirConfigPath(root)) ?? undefined,
     userToml: host.files.readFile(userConfigPath(env)) ?? undefined,
   };
-
-  const prompt = resolvePrompt(host, flags);
   const result = await auditPath(root, {
     concurrency: flags.concurrency,
     deps: {
@@ -562,12 +527,45 @@ export const run = async (
       which: host.which,
     },
     layers,
-    mode: modeFromFlags(flags, buildWriteDeps(flags, host), prompt),
+    mode: modeFromFlags(
+      flags,
+      buildWriteDeps(flags, host),
+      resolvePrompt(host, flags)
+    ),
     noCache: flags.noCache,
     refresh: flags.refresh,
   });
-
   emitConfigSources(flags, result, env, root, host);
   emitOutput(flags, result, host, cwd, color);
   return { exitCode: result.exitCode };
+};
+
+export const run = async (
+  argv: string[],
+  host: Host
+): Promise<{ exitCode: ExitCode }> => {
+  const cwd = host.cwd();
+  const { env } = host;
+  const color = resolveColor(host);
+  const [head, ...rest] = argv;
+  if (head === undefined) {
+    return writeUsageError(
+      withHelpConfig(formatRootHelp(color), host),
+      host.stderr
+    );
+  }
+  const helpResult = dispatchHelp(head, rest, color, host);
+  if (helpResult !== null) {
+    return helpResult;
+  }
+  if (head === "init") {
+    return runInit(rest, host);
+  }
+  if (head !== "audit") {
+    return writeUsageError(
+      withHelpConfig(formatUnknownCommand(head, color), host),
+      host.stderr
+    );
+  }
+  return await runAudit(rest, host, cwd, env, color);
 };
