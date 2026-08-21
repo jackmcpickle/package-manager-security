@@ -100,8 +100,36 @@ test("poetry, pip, and pipenv primaries require no binary", () => {
   expect(result.missing).toEqual([]);
 });
 
-test("missing yarn bun and uv primaries each emit pm.missing-binary", () => {
-  for (const name of ["yarn", "bun", "uv"] as const) {
+test("missing bundler primary emits pm.missing-binary for bundle-audit", () => {
+  const project: Project = {
+    gitRoot: "/rb",
+    managers: [
+      {
+        configPath: "/rb/.bundle/config",
+        lockfilePath: "/rb/Gemfile.lock",
+        manifestPath: "/rb/Gemfile",
+        name: "bundler",
+        role: "primary",
+      },
+    ],
+    root: "/rb",
+  };
+  const result = preflight(project, { which: () => null });
+  expect(result.missing).toEqual([
+    { binary: "bundle-audit", manager: "bundler" },
+  ]);
+  expect(result.warnings[0]).toEqual(
+    expect.objectContaining({
+      code: "pm.missing-binary",
+      kind: "missing-binary",
+      manager: "bundler",
+      message: "Missing bundle-audit binary for bundler",
+    })
+  );
+});
+
+test("missing yarn bun uv and cargo primaries each emit pm.missing-binary", () => {
+  for (const name of ["yarn", "bun", "uv", "cargo"] as const) {
     const project: Project = {
       gitRoot: "/p",
       managers: [

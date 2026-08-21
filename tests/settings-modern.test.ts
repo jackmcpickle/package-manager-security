@@ -7,6 +7,7 @@ import { auditSettings } from "../src/settings";
 
 const CONFIG_NAME: Record<string, string> = {
   bun: "bunfig.toml",
+  cargo: ".cargo/config.toml",
   npm: ".npmrc",
   pnpm: "pnpm-workspace.yaml",
   uv: "pyproject.toml",
@@ -15,6 +16,7 @@ const CONFIG_NAME: Record<string, string> = {
 
 const LOCK_NAME: Record<string, string> = {
   bun: "bun.lock",
+  cargo: "Cargo.lock",
   npm: "package-lock.json",
   pnpm: "pnpm-lock.yaml",
   uv: "uv.lock",
@@ -22,7 +24,12 @@ const LOCK_NAME: Record<string, string> = {
 };
 
 const project = (name: PackageManager, root = "/p"): Project => {
-  const manifest = name === "uv" ? "pyproject.toml" : "package.json";
+  const manifest =
+    name === "uv"
+      ? "pyproject.toml"
+      : name === "cargo"
+        ? "Cargo.toml"
+        : "package.json";
   return {
     gitRoot: root,
     managers: [
@@ -57,11 +64,24 @@ const find = (
     readFile: (p) => files[p] ?? null,
   }).find((f) => f.code === code);
 
+const pnpmSecureBaseline =
+  "trustPolicy: no-downgrade\nverifyDepsBeforeRun: error\n";
+
 /** A pnpm project whose only interesting content is the workspace yaml. */
 const pnpmFiles = (version: string, yaml: string): Record<string, string> => ({
   "/p/package.json": `{"name":"x","packageManager":"pnpm@${version}"}`,
   "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
-  "/p/pnpm-workspace.yaml": `registry: "https://registry.npmjs.org/"\naudit: true\nauditLevel: high\n${yaml}`,
+  "/p/pnpm-workspace.yaml": `registry: "https://registry.npmjs.org/"\naudit: true\nauditLevel: high\n${pnpmSecureBaseline}${yaml}`,
+});
+
+/** Like pnpmFiles but without the pmsec security baseline — for gap tests. */
+const pnpmFilesInsecure = (
+  version: string,
+  yaml: string
+): Record<string, string> => ({
+  "/p/package.json": `{"name":"x","packageManager":"pnpm@${version}"}`,
+  "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+  "/p/pnpm-workspace.yaml": `registry: "https://registry.npmjs.org/"\naudit: true\nauditLevel: high\nminimumReleaseAge: 1440\nallowBuilds: {}\n${yaml}`,
 });
 
 const yarnFiles = (version: string, yaml: string): Record<string, string> => ({
@@ -87,7 +107,7 @@ const npmFiles = (manifest: string, npmrc: string): Record<string, string> => ({
 test("pnpm 11 allowBuilds satisfies the script check", () => {
   const files = pnpmFiles(
     "11.7.0",
-    "minimumReleaseAge: 10080\nallowBuilds:\n  esbuild: true\n"
+    "minimumReleaseAge: 1440\nallowBuilds:\n  esbuild: true\n"
   );
   expect(codes("pnpm", files)).toEqual([]);
 });
@@ -95,7 +115,7 @@ test("pnpm 11 allowBuilds satisfies the script check", () => {
 test("pnpm 11 flags the removed onlyBuiltDependencies family", () => {
   const files = pnpmFiles(
     "11.7.0",
-    "minimumReleaseAge: 10080\nonlyBuiltDependencies:\n  - esbuild\n"
+    "minimumReleaseAge: 1440\nonlyBuiltDependencies:\n  - esbuild\n"
   );
   const finding = find("pnpm", files, "scripts.legacy-config");
   expect(finding?.severity).toBe("high");
@@ -105,7 +125,7 @@ test("pnpm 11 flags the removed onlyBuiltDependencies family", () => {
 test("pnpm 10 still accepts the legacy build allowlist", () => {
   const files = pnpmFiles(
     "10.0.0",
-    "minimumReleaseAge: 10080\nonlyBuiltDependencies:\n  - esbuild\n"
+    "minimumReleaseAge: 1440\nonlyBuiltDependencies:\n  - esbuild\n"
   );
   expect(codes("pnpm", files)).toEqual([]);
 });
@@ -113,27 +133,27 @@ test("pnpm 10 still accepts the legacy build allowlist", () => {
 test("pnpm dangerouslyAllowAllBuilds is high regardless of version", () => {
   const files = pnpmFiles(
     "11.7.0",
-    "minimumReleaseAge: 10080\ndangerouslyAllowAllBuilds: true\n"
+    "minimumReleaseAge: 1440\ndangerouslyAllowAllBuilds: true\n"
   );
   expect(find("pnpm", files, "scripts.unrestricted")?.severity).toBe("high");
 });
 
 test("pnpm relying on the safe build default is info, not high", () => {
-  const files = pnpmFiles("11.7.0", "minimumReleaseAge: 10080\n");
+  const files = pnpmFiles("11.7.0", "minimumReleaseAge: 1440\n");
   const finding = find("pnpm", files, "scripts.unrestricted");
   expect(finding?.severity).toBe("info");
   expect(finding?.fixable).toBe(true);
 });
 
 test("pnpm 9 without any allowlist is still high", () => {
-  const files = pnpmFiles("9.0.0", "minimumReleaseAge: 10080\n");
+  const files = pnpmFiles("9.0.0", "minimumReleaseAge: 1440\n");
   expect(find("pnpm", files, "scripts.unrestricted")?.severity).toBe("high");
 });
 
 test("pnpm strictDepBuilds: false is flagged", () => {
   const files = pnpmFiles(
     "11.7.0",
-    "minimumReleaseAge: 10080\nallowBuilds: {}\nstrictDepBuilds: false\n"
+    "minimumReleaseAge: 1440\nallowBuilds: {}\nstrictDepBuilds: false\n"
   );
   expect(codes("pnpm", files)).toContain("scripts.non-strict");
 });
@@ -141,9 +161,75 @@ test("pnpm strictDepBuilds: false is flagged", () => {
 test("pnpm blockExoticSubdeps: false is flagged", () => {
   const files = pnpmFiles(
     "11.7.0",
-    "minimumReleaseAge: 10080\nallowBuilds: {}\nblockExoticSubdeps: false\n"
+    "minimumReleaseAge: 1440\nallowBuilds: {}\nblockExoticSubdeps: false\n"
   );
   expect(codes("pnpm", files)).toContain("source.non-registry");
+});
+
+// --- pnpm pmsec security gaps -----------------------------------------------
+
+test("pnpm 11 flags missing trustPolicy", () => {
+  const files = pnpmFilesInsecure("11.7.0", "");
+  expect(codes("pnpm", files)).toContain("provenance.no-downgrade");
+});
+
+test("pnpm 11 flags trustPolicy other than no-downgrade", () => {
+  const files = pnpmFilesInsecure("11.7.0", "trustPolicy: off\n");
+  expect(codes("pnpm", files)).toContain("provenance.no-downgrade");
+});
+
+test("pnpm 10.20 skips trustPolicy check", () => {
+  const files = pnpmFilesInsecure("10.20.0", "");
+  expect(codes("pnpm", files)).not.toContain("provenance.no-downgrade");
+});
+
+test("pnpm 11 flags trustLockfile: true", () => {
+  const files = pnpmFilesInsecure("11.7.0", "trustLockfile: true\n");
+  expect(codes("pnpm", files)).toContain("lockfile.trust-bypass");
+});
+
+test("pnpm 11 accepts absent trustLockfile", () => {
+  const files = pnpmFilesInsecure("11.7.0", "trustPolicy: no-downgrade\n");
+  expect(codes("pnpm", files)).not.toContain("lockfile.trust-bypass");
+});
+
+test("pnpm 11 flags verifyDepsBeforeRun not error", () => {
+  const files = pnpmFilesInsecure("11.7.0", "trustPolicy: no-downgrade\n");
+  expect(codes("pnpm", files)).toContain("lockfile.run-verify");
+});
+
+test("pnpm 11 accepts verifyDepsBeforeRun: error", () => {
+  const files = pnpmFilesInsecure(
+    "11.7.0",
+    "trustPolicy: no-downgrade\nverifyDepsBeforeRun: error\n"
+  );
+  expect(codes("pnpm", files)).not.toContain("lockfile.run-verify");
+});
+
+test("pnpm 10.11 skips verifyDepsBeforeRun check", () => {
+  const files = pnpmFilesInsecure("10.11.0", "trustPolicy: no-downgrade\n");
+  expect(codes("pnpm", files)).not.toContain("lockfile.run-verify");
+});
+
+test("apply writes pnpm pmsec security keys", () => {
+  const files = pnpmFilesInsecure("11.7.0", "trustLockfile: true\n");
+  const target = project("pnpm");
+  const findings = auditSettings(target, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  applySettings(target, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  const written = files["/p/pnpm-workspace.yaml"] ?? "";
+  expect(written).toContain("trustPolicy: no-downgrade");
+  expect(written).toContain("trustLockfile: false");
+  expect(written).toContain("verifyDepsBeforeRun: error");
 });
 
 // --- release-age gates ------------------------------------------------------
@@ -154,15 +240,15 @@ test("pnpm 11 inherits minimumReleaseAge 1440, which clears a 1-day bar", () => 
   expect(codes("pnpm", files, policy)).toEqual([]);
 });
 
-test("pnpm 11 default of 1440 minutes does not clear the standard 7-day bar", () => {
+test("pnpm 11 default of 1440 minutes clears the standard 1-day bar", () => {
   const files = pnpmFiles("11.7.0", "allowBuilds: {}\n");
-  expect(codes("pnpm", files)).toContain("min-age.disabled");
+  expect(codes("pnpm", files)).not.toContain("min-age.disabled");
 });
 
 test("pnpm minimumReleaseAgeStrict: false is flagged", () => {
   const files = pnpmFiles(
     "11.7.0",
-    "allowBuilds: {}\nminimumReleaseAge: 10080\nminimumReleaseAgeStrict: false\n"
+    "allowBuilds: {}\nminimumReleaseAge: 1440\nminimumReleaseAgeStrict: false\n"
   );
   expect(codes("pnpm", files)).toContain("min-age.non-strict");
 });
@@ -170,7 +256,7 @@ test("pnpm minimumReleaseAgeStrict: false is flagged", () => {
 test("a wildcard minimumReleaseAgeExclude voids the gate", () => {
   const files = pnpmFiles(
     "11.7.0",
-    'allowBuilds: {}\nminimumReleaseAge: 10080\nminimumReleaseAgeExclude:\n  - "*"\n'
+    'allowBuilds: {}\nminimumReleaseAge: 1440\nminimumReleaseAgeExclude:\n  - "*"\n'
   );
   expect(codes("pnpm", files)).toContain("min-age.exclude-all");
 });
@@ -178,7 +264,7 @@ test("a wildcard minimumReleaseAgeExclude voids the gate", () => {
 test("a named minimumReleaseAgeExclude is left alone", () => {
   const files = pnpmFiles(
     "11.7.0",
-    "allowBuilds: {}\nminimumReleaseAge: 10080\nminimumReleaseAgeExclude:\n  - typescript\n"
+    "allowBuilds: {}\nminimumReleaseAge: 1440\nminimumReleaseAgeExclude:\n  - typescript\n"
   );
   expect(codes("pnpm", files)).not.toContain("min-age.exclude-all");
 });
@@ -207,7 +293,7 @@ test("relaxed preset skips every release-age check", () => {
 // --- yarn -------------------------------------------------------------------
 
 test("yarn 4.15 relying on the enableScripts default is info, not high", () => {
-  const files = yarnFiles("4.15.0", "npmMinimalAgeGate: 10080\n");
+  const files = yarnFiles("4.15.0", "npmMinimalAgeGate: 1440\n");
   const finding = find("yarn", files, "scripts.unrestricted");
   expect(finding?.severity).toBe("info");
   expect(finding?.fixable).toBe(true);
@@ -216,20 +302,20 @@ test("yarn 4.15 relying on the enableScripts default is info, not high", () => {
 test("yarn enableScripts: true is high even on 4.15", () => {
   const files = yarnFiles(
     "4.15.0",
-    "npmMinimalAgeGate: 10080\nenableScripts: true\n"
+    "npmMinimalAgeGate: 1440\nenableScripts: true\n"
   );
   expect(find("yarn", files, "scripts.unrestricted")?.severity).toBe("high");
 });
 
 test("yarn 4.13 predates the scripts-off default so an absent key is high", () => {
-  const files = yarnFiles("4.13.0", "npmMinimalAgeGate: 10080\n");
+  const files = yarnFiles("4.13.0", "npmMinimalAgeGate: 1440\n");
   expect(find("yarn", files, "scripts.unrestricted")?.severity).toBe("high");
 });
 
 test("yarn npmMinimalAgeGate accepts duration strings", () => {
   const files = yarnFiles(
     "4.15.0",
-    "enableScripts: false\nnpmMinimalAgeGate: 7d\n"
+    "enableScripts: false\nnpmMinimalAgeGate: 7d\napprovedGitRepositories: []\n"
   );
   expect(codes("yarn", files)).toEqual([]);
 });
@@ -272,12 +358,58 @@ test("yarn enableStrictSsl: false and enableHardenedMode: false are flagged", ()
   expect(found).toContain("integrity.hardened-mode");
 });
 
+test("yarn 4.15 with approvedGitRepositories: [] passes git source check", () => {
+  const files = yarnFiles(
+    "4.15.0",
+    "enableScripts: false\nnpmMinimalAgeGate: 1440\napprovedGitRepositories: []\n"
+  );
+  expect(codes("yarn", files)).not.toContain("source.git-unrestricted");
+});
+
+test("yarn 4.15 missing approvedGitRepositories is high under standard", () => {
+  const files = yarnFiles(
+    "4.15.0",
+    "enableScripts: false\nnpmMinimalAgeGate: 1440\n"
+  );
+  expect(find("yarn", files, "source.git-unrestricted")?.severity).toBe("high");
+});
+
+test("yarn 4.15 with wildcard approvedGitRepositories is high", () => {
+  const files = yarnFiles(
+    "4.15.0",
+    'enableScripts: false\nnpmMinimalAgeGate: 1440\napprovedGitRepositories:\n  - "*"\n'
+  );
+  expect(find("yarn", files, "source.git-unrestricted")?.severity).toBe("high");
+});
+
+test("yarn 4.15 with explicit git allowlist is not flagged", () => {
+  const files = yarnFiles(
+    "4.15.0",
+    'enableScripts: false\nnpmMinimalAgeGate: 1440\napprovedGitRepositories:\n  - "https://github.com/myorg/*"\n'
+  );
+  expect(codes("yarn", files)).not.toContain("source.git-unrestricted");
+});
+
+test("yarn 4.13 predates approvedGitRepositories so missing key is high", () => {
+  const files = yarnFiles(
+    "4.13.0",
+    "enableScripts: false\nnpmMinimalAgeGate: 1440\n"
+  );
+  expect(find("yarn", files, "source.git-unrestricted")?.severity).toBe("high");
+});
+
+test("yarn git source check skipped when ignoreScripts policy is off", () => {
+  const files = yarnFiles("4.15.0", "npmMinimalAgeGate: 1440\n");
+  const relaxed = loadPolicy({ flags: { preset: "relaxed" } });
+  expect(codes("yarn", files, relaxed)).not.toContain("source.git-unrestricted");
+});
+
 // --- bun --------------------------------------------------------------------
 
 test("bun minimumReleaseAge is read as seconds", () => {
-  expect(codes("bun", bunFiles("minimumReleaseAge = 604800\n"))).toEqual([]);
-  // 10080 would be seven days in minutes, but bun counts seconds.
-  expect(codes("bun", bunFiles("minimumReleaseAge = 10080\n"))).toContain(
+  expect(codes("bun", bunFiles("minimumReleaseAge = 86400\n"))).toEqual([]);
+  // 43200 seconds is twelve hours; bun counts seconds, not minutes.
+  expect(codes("bun", bunFiles("minimumReleaseAge = 43200\n"))).toContain(
     "min-age.disabled"
   );
 });
@@ -288,7 +420,7 @@ test("bun with no minimumReleaseAge is flagged", () => {
 
 test("a wildcard minimumReleaseAgeExcludes voids the bun gate", () => {
   const files = bunFiles(
-    'minimumReleaseAge = 604800\nminimumReleaseAgeExcludes = ["*"]\n'
+    'minimumReleaseAge = 86400\nminimumReleaseAgeExcludes = ["*"]\n'
   );
   expect(codes("bun", files)).toContain("min-age.exclude-all");
 });
@@ -298,7 +430,7 @@ test("a wildcard minimumReleaseAgeExcludes voids the bun gate", () => {
 test("an enforced allowScripts policy replaces blanket ignore-scripts", () => {
   const files = npmFiles(
     `{"name":"x","packageManager":"npm@11.17.0","allowScripts":{"esbuild@0.2.5":true}}`,
-    "strict-allow-scripts=true\n"
+    "strict-allow-scripts=true\nallow-scripts-pin=true\n"
   );
   expect(codes("npm", files)).toEqual([]);
 });
@@ -331,6 +463,91 @@ test("npm allow-git=all is flagged", () => {
   expect(codes("npm", files)).toContain("source.non-registry");
 });
 
+test("npm allow-file=all is flagged", () => {
+  const files = npmFiles(
+    `{"name":"x","packageManager":"npm@11.17.0"}`,
+    "ignore-scripts=true\nallow-file=all\n"
+  );
+  expect(codes("npm", files)).toContain("source.non-registry");
+});
+
+test("npm allow-directory=all is flagged", () => {
+  const files = npmFiles(
+    `{"name":"x","packageManager":"npm@11.17.0"}`,
+    "ignore-scripts=true\nallow-directory=all\n"
+  );
+  expect(codes("npm", files)).toContain("source.non-registry");
+});
+
+test("npm missing allow-scripts-pin is flagged under standard", () => {
+  const files = npmFiles(
+    `{"name":"x","packageManager":"npm@11.17.0"}`,
+    "ignore-scripts=true\n"
+  );
+  expect(codes("npm", files)).toContain("scripts.pin-missing");
+});
+
+test("npm allow-scripts-pin=true passes the pin check", () => {
+  const files = npmFiles(
+    `{"name":"x","packageManager":"npm@11.17.0"}`,
+    "ignore-scripts=true\nallow-scripts-pin=true\n"
+  );
+  expect(codes("npm", files)).not.toContain("scripts.pin-missing");
+});
+
+test("npm dangerously-allow-all-scripts=true emits scripts.bypass-enabled", () => {
+  const files = npmFiles(
+    `{"name":"x","packageManager":"npm@11.17.0"}`,
+    "ignore-scripts=true\ndangerously-allow-all-scripts=true\n"
+  );
+  expect(codes("npm", files)).toContain("scripts.bypass-enabled");
+});
+
+test("npm script bypass and pin findings are skipped under relaxed", () => {
+  const files = npmFiles(`{"name":"x","packageManager":"npm@11.17.0"}`, "");
+  const relaxed = loadPolicy({ flags: { preset: "relaxed" } });
+  const found = codes("npm", files, relaxed);
+  expect(found).not.toContain("scripts.pin-missing");
+  expect(found).not.toContain("scripts.bypass-enabled");
+});
+
+// --- cargo ------------------------------------------------------------------
+
+const cargoFiles = (install: string): Record<string, string> => ({
+  "/p/.cargo/config.toml": `[install]\n${install}`,
+  "/p/Cargo.lock": "# cargo\n",
+  "/p/Cargo.toml": '[package]\nname = "x"\nversion = "0.1.0"\n',
+});
+
+test("cargo minimum-release-age accepts duration strings", () => {
+  expect(codes("cargo", cargoFiles('minimum-release-age = "1d"\n'))).toEqual(
+    []
+  );
+  expect(codes("cargo", cargoFiles('minimum-release-age = "1 week"\n'))).toEqual(
+    []
+  );
+  expect(codes("cargo", cargoFiles('minimum-release-age = "12h"\n'))).toContain(
+    "min-age.disabled"
+  );
+});
+
+test("cargo without minimum-release-age emits min-age.disabled under standard", () => {
+  const files = {
+    "/p/.cargo/config.toml": "[install]\n",
+    "/p/Cargo.lock": "# cargo\n",
+    "/p/Cargo.toml": '[package]\nname = "x"\nversion = "0.1.0"\n',
+  };
+  expect(codes("cargo", files)).toContain("min-age.disabled");
+});
+
+test("cargo without Cargo.lock emits lockfile.missing under standard", () => {
+  const files = {
+    "/p/.cargo/config.toml": '[install]\nminimum-release-age = "1d"\n',
+    "/p/Cargo.toml": '[package]\nname = "x"\nversion = "0.1.0"\n',
+  };
+  expect(codes("cargo", files)).toContain("lockfile.missing");
+});
+
 // --- uv ---------------------------------------------------------------------
 
 const uvFiles = (toolUv: string): Record<string, string> => ({
@@ -339,18 +556,51 @@ const uvFiles = (toolUv: string): Record<string, string> => ({
 });
 
 test("uv exclude-newer accepts uv's own duration spelling", () => {
-  expect(codes("uv", uvFiles(`exclude-newer = "7 days"\n`))).toEqual([]);
-  expect(codes("uv", uvFiles(`exclude-newer = "1 week"\n`))).toEqual([]);
-  expect(codes("uv", uvFiles(`exclude-newer = "2 days"\n`))).toContain(
+  const audit = `\n\n[tool.uv.audit]\nmalware-check = true\n`;
+  expect(
+    codes("uv", uvFiles(`exclude-newer = "1 days"\n${audit}`))
+  ).toEqual([]);
+  expect(
+    codes("uv", uvFiles(`exclude-newer = "1 week"\n${audit}`))
+  ).toEqual([]);
+  expect(codes("uv", uvFiles(`exclude-newer = "12 hours"\n${audit}`))).toContain(
     "min-age.disabled"
   );
 });
 
 test("a wildcard exclude-newer-package voids the uv gate", () => {
   const files = uvFiles(
-    `exclude-newer = "7 days"\n\n[tool.uv.exclude-newer-package]\n"*" = false\n`
+    `exclude-newer = "1 days"\n\n[tool.uv.exclude-newer-package]\n"*" = false\n`
   );
   expect(codes("uv", files)).toContain("min-age.exclude-all");
+});
+
+test("uv with audit malware-check true passes", () => {
+  const files = uvFiles(
+    `exclude-newer = "1 days"\n\n[tool.uv.audit]\nmalware-check = true\n`
+  );
+  expect(codes("uv", files)).not.toContain("audit.malware-disabled");
+});
+
+test("uv missing malware-check is flagged", () => {
+  const files = uvFiles(`exclude-newer = "1 days"\n`);
+  expect(codes("uv", files)).toContain("audit.malware-disabled");
+});
+
+test("uv malware-check false is flagged", () => {
+  const files = uvFiles(
+    `exclude-newer = "1 days"\n\n[tool.uv.audit]\nmalware-check = false\n`
+  );
+  expect(codes("uv", files)).toContain("audit.malware-disabled");
+});
+
+test("uv malware-check in uv.toml is honored", () => {
+  const files: Record<string, string> = {
+    "/p/pyproject.toml": `[project]\nname = "x"\n`,
+    "/p/uv.lock": "version = 1\n",
+    "/p/uv.toml": `exclude-newer = "1 days"\n\n[audit]\nmalware-check = true\n`,
+  };
+  expect(codes("uv", files)).not.toContain("audit.malware-disabled");
 });
 
 // --- apply ------------------------------------------------------------------
@@ -358,7 +608,7 @@ test("a wildcard exclude-newer-package voids the uv gate", () => {
 test("apply migrates the pnpm legacy build allowlist into allowBuilds", () => {
   const files = pnpmFiles(
     "11.7.0",
-    "minimumReleaseAge: 10080\nonlyBuiltDependencies:\n  - esbuild\nneverBuiltDependencies:\n  - core-js\n"
+    "minimumReleaseAge: 1440\nonlyBuiltDependencies:\n  - esbuild\nneverBuiltDependencies:\n  - core-js\n"
   );
   const target = project("pnpm");
   const findings = auditSettings(target, loadPolicy({}), {
@@ -380,10 +630,36 @@ test("apply migrates the pnpm legacy build allowlist into allowBuilds", () => {
   expect(written).not.toContain("neverBuiltDependencies");
 });
 
+test("apply writes npm non-registry and script pin keys", () => {
+  const files = npmFiles(
+    `{"name":"x","packageManager":"npm@11.17.0"}`,
+    "allow-git=all\nallow-file=all\nallow-directory=all\ndangerously-allow-all-scripts=true\n"
+  );
+  const target = project("npm");
+  const findings = auditSettings(target, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  applySettings(target, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  const written = files["/p/.npmrc"] ?? "";
+  expect(written).toContain("allow-git=none");
+  expect(written).toContain("allow-file=none");
+  expect(written).toContain("allow-directory=none");
+  expect(written).toContain("allow-scripts-pin=true");
+  expect(written).toContain("dangerously-allow-all-scripts=false");
+});
+
 test("apply strips wildcard entries from a pnpm exclude list", () => {
   const files = pnpmFiles(
     "11.7.0",
-    'allowBuilds: {}\nminimumReleaseAge: 10080\nminimumReleaseAgeExclude:\n  - "*"\n  - typescript\n'
+    'allowBuilds: {}\nminimumReleaseAge: 1440\nminimumReleaseAgeExclude:\n  - "*"\n  - typescript\n'
   );
   const target = project("pnpm");
   const findings = auditSettings(target, loadPolicy({}), {
@@ -401,4 +677,45 @@ test("apply strips wildcard entries from a pnpm exclude list", () => {
   const written = files["/p/pnpm-workspace.yaml"] ?? "";
   expect(written).toContain("typescript");
   expect(written).not.toContain('"*"');
+});
+
+test("apply sets approvedGitRepositories: [] on yarn", () => {
+  const files = yarnFiles(
+    "4.15.0",
+    "enableScripts: false\nnpmMinimalAgeGate: 1440\n"
+  );
+  const target = project("yarn");
+  const findings = auditSettings(target, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.map((f) => f.code)).toContain("source.git-unrestricted");
+  applySettings(target, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  expect(files["/p/.yarnrc.yml"]).toContain("approvedGitRepositories: []");
+});
+
+test("apply sets audit malware-check on uv", () => {
+  const files = uvFiles(`exclude-newer = "1 days"\n`);
+  const target = project("uv");
+  const findings = auditSettings(target, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.map((f) => f.code)).toContain("audit.malware-disabled");
+  applySettings(target, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  expect(files["/p/pyproject.toml"]).toContain("malware-check = true");
 });

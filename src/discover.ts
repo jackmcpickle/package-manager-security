@@ -34,6 +34,7 @@ const NESTED_CONFIGS = [
   "bunfig.toml",
   "uv.toml",
   "uv.lock",
+  "Cargo.toml",
 ];
 
 interface Fs {
@@ -140,9 +141,13 @@ const ROOT_PM_FILES = [
   "bunfig.toml",
   "uv.lock",
   "uv.toml",
+  "Cargo.toml",
+  "Cargo.lock",
   "poetry.lock",
   "Pipfile",
   "Pipfile.lock",
+  "Gemfile",
+  "Gemfile.lock",
 ] as const;
 
 const hasNamedFile = (names: Set<string>, files: readonly string[]): boolean =>
@@ -167,6 +172,10 @@ const hasNestedConfig = (dir: string, fs: Fs): boolean => {
     names.has("poetry.lock") ||
     names.has("Pipfile") ||
     names.has("Pipfile.lock") ||
+    names.has("Cargo.toml") ||
+    names.has("Cargo.lock") ||
+    names.has("Gemfile") ||
+    names.has("Gemfile.lock") ||
     hasRequirementsTxt(names)
   ) {
     return true;
@@ -585,6 +594,24 @@ const detectPip = (
   return manager("pip", "primary", manifest, null, null);
 };
 
+const detectBundler = (
+  dir: string,
+  names: Set<string>,
+  fs: Fs
+): DetectedManager | null => {
+  if (!names.has("Gemfile")) {
+    return null;
+  }
+  const configPath = path.join(dir, ".bundle/config");
+  return manager(
+    "bundler",
+    "primary",
+    path.join(dir, "Gemfile"),
+    names.has("Gemfile.lock") ? path.join(dir, "Gemfile.lock") : null,
+    fs.readFile(configPath) !== null ? configPath : null
+  );
+};
+
 const uvRole = (
   jsPrimary: PackageManager | null,
   pythonProject: boolean
@@ -625,6 +652,39 @@ const detectUv = (
   );
 };
 
+const cargoConfigPath = (dir: string, fs: Fs): string => {
+  const configToml = path.join(dir, ".cargo/config.toml");
+  const config = path.join(dir, ".cargo/config");
+  if (fs.readFile(configToml) !== null) {
+    return configToml;
+  }
+  if (fs.readFile(config) !== null) {
+    return config;
+  }
+  return configToml;
+};
+
+const detectCargo = (
+  dir: string,
+  names: Set<string>,
+  fs: Fs,
+  jsPrimary: PackageManager | null
+): DetectedManager | null => {
+  const hasCargoToml = names.has("Cargo.toml");
+  if (!hasCargoToml && !names.has("Cargo.lock")) {
+    return null;
+  }
+  const role: ManagerRole =
+    hasCargoToml || jsPrimary === null ? "primary" : "leftover";
+  return manager(
+    "cargo",
+    role,
+    path.join(dir, "Cargo.toml"),
+    names.has("Cargo.lock") ? path.join(dir, "Cargo.lock") : null,
+    cargoConfigPath(dir, fs)
+  );
+};
+
 const appendManager = (
   managers: DetectedManager[],
   detected: DetectedManager | null
@@ -656,6 +716,8 @@ const detectManagers = (dir: string, fs: Fs): DetectedManager[] => {
     managers,
     detectPip(dir, names, fs, uv !== null, poetry !== null, pipenv !== null)
   );
+  appendManager(managers, detectBundler(dir, names, fs));
+  appendManager(managers, detectCargo(dir, names, fs, jsPrimary));
 
   return managers;
 };

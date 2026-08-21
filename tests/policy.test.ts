@@ -5,7 +5,15 @@ import { loadPolicy } from "../src/policy";
 test("defaults to standard preset when no config given", () => {
   const policy = loadPolicy({});
   expect(policy.preset).toBe("standard");
-  expect(policy.enabledManagers).toEqual(["npm", "pnpm", "yarn", "bun", "uv"]);
+  expect(policy.enabledManagers).toEqual([
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun",
+    "uv",
+    "bundler",
+    "cargo",
+  ]);
 });
 
 test("repo config overrides user preset and flags override repo", () => {
@@ -80,7 +88,15 @@ test("invalid TOML as the only layer leaves standard defaults", () => {
     userToml: `preset = "strict"\n[[[`,
   });
   expect(policy.preset).toBe("standard");
-  expect(policy.enabledManagers).toEqual(["npm", "pnpm", "yarn", "bun", "uv"]);
+  expect(policy.enabledManagers).toEqual([
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun",
+    "uv",
+    "bundler",
+    "cargo",
+  ]);
 });
 
 test("rejects poetry pip and pipenv as per-manager tables", () => {

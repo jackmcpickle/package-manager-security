@@ -16,6 +16,8 @@ const LIVE_MANAGERS = new Set<PackageManager>([
   "yarn",
   "bun",
   "uv",
+  "cargo",
+  "bundler",
 ]);
 const OSV_MANAGERS = new Set<PackageManager>(["poetry", "pip", "pipenv"]);
 
@@ -43,6 +45,12 @@ const auditArgv = (name: PackageManager): string[] | null => {
     }
     case "uv": {
       return ["uv", "audit", "--output-format", "json", "--frozen"];
+    }
+    case "cargo": {
+      return ["cargo", "audit", "--json"];
+    }
+    case "bundler": {
+      return ["bundle-audit", "check", "--format", "json"];
     }
     default: {
       return null;
@@ -149,6 +157,7 @@ const firstVersion = (item: Record<string, unknown>): string =>
   concreteVersion(item.version) ??
   concreteVersion(item.installedVersion) ??
   concreteVersion(packageVersion(item.package)) ??
+  concreteVersion(packageVersion(item.gem)) ??
   firstArrayVersion(item.findings) ??
   firstArrayVersion(item.via) ??
   "unknown";
@@ -242,6 +251,17 @@ const fixFromPatchedOrFixed = (
 ): string | undefined => {
   if (typeof item.patched_versions === "string") {
     return versionFromRange(item.patched_versions);
+  }
+  if (Array.isArray(item.patched_versions)) {
+    for (const entry of item.patched_versions) {
+      if (typeof entry !== "string") {
+        continue;
+      }
+      const version = versionFromRange(entry);
+      if (version !== undefined) {
+        return version;
+      }
+    }
   }
   if (Array.isArray(item.fixed) && typeof item.fixed[0] === "string") {
     return item.fixed[0];
@@ -456,7 +476,11 @@ const versionsForItem = (item: Record<string, unknown>): string[] => {
 
 const itemPackageName = (item: Record<string, unknown>): string =>
   String(
-    item.module_name ?? item.name ?? packageName(item.package) ?? "unknown"
+    item.module_name ??
+      item.name ??
+      packageName(item.package) ??
+      packageName(item.gem) ??
+      "unknown"
   );
 
 const itemAdvisoryMessage = (
@@ -479,9 +503,11 @@ const walkFindingEntries = (
 ): void => {
   const name = itemPackageName(item);
   const advisory = isPlainObject(item.advisory) ? item.advisory : item;
-  const severity = asSeverity(advisory.severity ?? item.severity);
+  const severity = asSeverity(
+    advisory.severity ?? advisory.criticality ?? item.severity
+  );
   const message = itemAdvisoryMessage(advisory, item, name, severity);
-  const fix = extractFix(item);
+  const fix = extractFix(advisory) ?? extractFix(item);
   const id = advisoryId(advisory);
   for (const version of versionsForItem(item)) {
     push(name, version, severity, id, message, kindFromItem(item, kind), fix);
@@ -594,7 +620,15 @@ const mapAuditJson = (
     return mappedPackages(findings, packages);
   }
   walkCollection(obj.advisories, push);
-  walkCollection(obj.vulnerabilities, push);
+  if (
+    isPlainObject(obj.vulnerabilities) &&
+    Array.isArray(obj.vulnerabilities.list)
+  ) {
+    walkCollection(obj.vulnerabilities.list, push);
+  } else {
+    walkCollection(obj.vulnerabilities, push);
+  }
+  walkCollection(obj.results, push);
   walkCollection(obj.dependencies, push);
   walkCollection(obj.audits, push);
   return mappedPackages(findings, packages);

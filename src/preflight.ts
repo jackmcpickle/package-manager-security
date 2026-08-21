@@ -7,6 +7,8 @@ export interface Preflight {
 
 const REQUIRED_BINARIES: Partial<Record<PackageManager, string>> = {
   bun: "bun",
+  bundler: "bundle-audit",
+  cargo: "cargo",
   npm: "npm",
   pnpm: "pnpm",
   uv: "uv",

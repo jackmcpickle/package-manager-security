@@ -826,9 +826,125 @@ test("advisory runner dying (non 0/1 exit code) throws an incomplete-tagged erro
   expect((caught as { incomplete?: boolean }).incomplete).toBe(true);
 });
 
+test("cargo primary runs `cargo audit --json` and parses vulnerabilities.list", async () => {
+  const cache = createFsCache(
+    path.join(cacheDir8, "cargo"),
+    () => 1000,
+    86_400_000
+  );
+  const calls: string[][] = [];
+  const cargoProject: Project = {
+    gitRoot: "/rs",
+    managers: [
+      {
+        configPath: "/rs/.cargo/config.toml",
+        lockfilePath: "/rs/Cargo.lock",
+        manifestPath: "/rs/Cargo.toml",
+        name: "cargo",
+        role: "primary",
+      },
+    ],
+    root: "/rs",
+  };
+  const result = await auditAdvisories(cargoProject, loadPolicy({}), {
+    cache,
+    digest: () => "cargo-digest",
+    now: () => 1000,
+    readFile: () => "lock",
+    run: (argv, cwd) => {
+      calls.push(argv);
+      expect(cwd).toBe("/rs");
+      return {
+        code: 1,
+        stderr: "",
+        stdout: JSON.stringify({
+          vulnerabilities: {
+            list: [
+              {
+                advisory: {
+                  id: "RUSTSEC-2024-0001",
+                  severity: "high",
+                  title: "serde high advisory",
+                },
+                package: { name: "serde", version: "1.0.0" },
+              },
+            ],
+          },
+        }),
+      };
+    },
+  });
+  expect(calls).toEqual([["cargo", "audit", "--json"]]);
+  const advisory = result.findings.find((f) => f.kind === "advisory");
+  expect(advisory?.severity).toBe("high");
+  expect(advisory?.package).toBe("serde");
+  expect(advisory?.currentVersion).toBe("1.0.0");
+  expect(advisory?.code).toBe("RUSTSEC-2024-0001");
+});
+
+test("bundler primary runs `bundle-audit check --format json` and parses results", async () => {
+  const cache = createFsCache(
+    path.join(cacheDir8, "bundler"),
+    () => 1000,
+    86_400_000
+  );
+  const calls: string[][] = [];
+  const bundlerProject: Project = {
+    gitRoot: "/rb",
+    managers: [
+      {
+        configPath: "/rb/.bundle/config",
+        lockfilePath: "/rb/Gemfile.lock",
+        manifestPath: "/rb/Gemfile",
+        name: "bundler",
+        role: "primary",
+      },
+    ],
+    root: "/rb",
+  };
+  const result = await auditAdvisories(bundlerProject, loadPolicy({}), {
+    cache,
+    digest: () => "bundler-digest",
+    now: () => 1000,
+    readFile: () => "lock",
+    run: (argv, cwd) => {
+      calls.push(argv);
+      expect(cwd).toBe("/rb");
+      return {
+        code: 1,
+        stderr: "",
+        stdout: JSON.stringify({
+          created_at: "2026-01-01T00:00:00Z",
+          results: [
+            {
+              advisory: {
+                criticality: "high",
+                ghsa: "whgm-jr23-g3j9",
+                id: "CVE-2015-7576",
+                patched_versions: [">= 4.2.5.1"],
+                title: "Possible XSS vulnerability in rails",
+              },
+              gem: { name: "rails", version: "4.2.0" },
+              type: "unpatched_gem",
+            },
+          ],
+          version: "0.9.3",
+        }),
+      };
+    },
+  });
+  expect(calls).toEqual([["bundle-audit", "check", "--format", "json"]]);
+  const advisory = result.findings.find((f) => f.kind === "advisory");
+  expect(advisory?.severity).toBe("high");
+  expect(advisory?.package).toBe("rails");
+  expect(advisory?.currentVersion).toBe("4.2.0");
+  expect(advisory?.code).toBe("CVE-2015-7576");
+  expect(advisory?.fixVersion).toBe("4.2.5.1");
+});
+
 test("live advisory argv is one native command per manager", async () => {
   const cases: {
-    name: "npm" | "pnpm" | "yarn" | "bun" | "uv";
+    name: "npm" | "pnpm" | "yarn" | "bun" | "uv" | "cargo" | "bundler";
     argv: string[];
   }[] = [
     { argv: ["npm", "audit", "--json"], name: "npm" },
@@ -838,6 +954,11 @@ test("live advisory argv is one native command per manager", async () => {
     {
       argv: ["uv", "audit", "--output-format", "json", "--frozen"],
       name: "uv",
+    },
+    { argv: ["cargo", "audit", "--json"], name: "cargo" },
+    {
+      argv: ["bundle-audit", "check", "--format", "json"],
+      name: "bundler",
     },
   ];
   await Promise.all(
@@ -880,43 +1001,74 @@ test("live advisory argv is one native command per manager", async () => {
 });
 
 test("enabledManagers omitting a live manager skips its native audit subprocess", async () => {
-  const calls: string[][] = [];
-  const cache = createFsCache(
-    path.join(cacheDir8, "disabled"),
-    () => 1000,
-    86_400_000
-  );
-  const result = await auditAdvisories(
+  const cases: {
+    name: "pnpm" | "cargo" | "bundler";
+    enabled: string[];
+  }[] = [
     {
-      gitRoot: "/p",
-      managers: [
-        {
-          configPath: "/p/pnpm-workspace.yaml",
-          lockfilePath: "/p/pnpm-lock.yaml",
-          manifestPath: "/p/package.json",
-          name: "pnpm",
-          role: "primary",
-        },
-      ],
-      root: "/p",
+      enabled: ["npm", "yarn", "bun", "uv"],
+      name: "pnpm",
     },
-    loadPolicy({
-      scanToml: 'enabledManagers = ["npm", "yarn", "bun", "uv"]\n',
-    }),
     {
-      cache,
-      digest: () => "disabled-pnpm",
-      now: () => 1000,
-      readFile: () => "lock",
-      run: (argv) => {
-        calls.push(argv);
-        return { code: 1, stderr: "", stdout: `{"advisories":{}}` };
+      enabled: ["npm", "yarn", "bun", "uv", "bundler"],
+      name: "cargo",
+    },
+    {
+      enabled: ["npm", "yarn", "bun", "uv", "cargo"],
+      name: "bundler",
+    },
+  ];
+  for (const row of cases) {
+    const calls: string[][] = [];
+    const cache = createFsCache(
+      path.join(cacheDir8, `disabled-${row.name}`),
+      () => 1000,
+      86_400_000
+    );
+    const manifest =
+      row.name === "pnpm"
+        ? "/p/package.json"
+        : row.name === "cargo"
+          ? "/p/Cargo.toml"
+          : "/p/Gemfile";
+    const lockfile =
+      row.name === "pnpm"
+        ? "/p/pnpm-lock.yaml"
+        : row.name === "cargo"
+          ? "/p/Cargo.lock"
+          : "/p/Gemfile.lock";
+    const result = await auditAdvisories(
+      {
+        gitRoot: "/p",
+        managers: [
+          {
+            configPath: null,
+            lockfilePath: lockfile,
+            manifestPath: manifest,
+            name: row.name,
+            role: "primary",
+          },
+        ],
+        root: "/p",
       },
-    }
-  );
-  expect(calls).toEqual([]);
-  expect(result.findings).toEqual([]);
-  expect(result.ranLive).toBe(false);
+      loadPolicy({
+        scanToml: `enabledManagers = ${JSON.stringify(row.enabled)}\n`,
+      }),
+      {
+        cache,
+        digest: () => `disabled-${row.name}`,
+        now: () => 1000,
+        readFile: () => "lock",
+        run: (argv) => {
+          calls.push(argv);
+          return { code: 1, stderr: "", stdout: `{"advisories":{}}` };
+        },
+      }
+    );
+    expect(calls).toEqual([]);
+    expect(result.findings).toEqual([]);
+    expect(result.ranLive).toBe(false);
+  }
 });
 
 test("npm v7 vulnerabilities map fills package currentVersion and fixVersion", async () => {

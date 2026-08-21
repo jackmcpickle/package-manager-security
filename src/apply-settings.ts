@@ -258,6 +258,14 @@ const npmrcUpdates = (
   if (codes.has("source.non-registry")) {
     updates["allow-git"] = "none";
     updates["allow-remote"] = "none";
+    updates["allow-file"] = "none";
+    updates["allow-directory"] = "none";
+  }
+  if (codes.has("scripts.pin-missing")) {
+    updates["allow-scripts-pin"] = "true";
+  }
+  if (codes.has("scripts.bypass-enabled")) {
+    updates["dangerously-allow-all-scripts"] = "false";
   }
   if (codes.has("registry.unpinned")) {
     updates.registry = DEFAULT_REGISTRY;
@@ -350,6 +358,21 @@ const applyPnpmAuditAndAge = (
   }
 };
 
+const applyPnpmSecurity = (
+  yaml: Record<string, unknown>,
+  codes: Set<string>
+): void => {
+  if (codes.has("provenance.no-downgrade")) {
+    yaml.trustPolicy = "no-downgrade";
+  }
+  if (codes.has("lockfile.trust-bypass")) {
+    yaml.trustLockfile = false;
+  }
+  if (codes.has("lockfile.run-verify")) {
+    yaml.verifyDepsBeforeRun = "error";
+  }
+};
+
 const applyPnpmRegistry = (
   yaml: Record<string, unknown>,
   codes: Set<string>
@@ -375,6 +398,7 @@ const mergePnpmYaml = (
   const { value: yaml } = parsed;
   applyPnpmScripts(yaml, codes);
   applyPnpmAuditAndAge(yaml, codes, settings);
+  applyPnpmSecurity(yaml, codes);
   applyPnpmRegistry(yaml, codes);
   return stringifyYaml(yaml);
 };
@@ -390,6 +414,9 @@ const applyYarnScriptsAndAudit = (
     delete yaml.audit;
     delete yaml.npmAudit;
     yaml.enableNpmAudit = true;
+  }
+  if (codes.has("source.git-unrestricted")) {
+    yaml.approvedGitRepositories = [];
   }
 };
 
@@ -509,7 +536,84 @@ const mergeUv = (
   if (codes.has("registry.unpinned")) {
     target["index-strategy"] = "first-index";
   }
+  if (codes.has("audit.malware-disabled")) {
+    const audit = isPlainObject(target.audit) ? target.audit : {};
+    audit["malware-check"] = true;
+    target.audit = audit;
+  }
   return `${stringifyToml(table).trimEnd()}\n`;
+};
+
+const cargoDuration = (days: number): string => {
+  if (days <= 0) {
+    return "0d";
+  }
+  if (days % 7 === 0) {
+    return `${days / 7}w`;
+  }
+  return `${days}d`;
+};
+
+const mergeCargo = (
+  raw: string,
+  codes: Set<string>,
+  settings: ResolvedSettings
+): string | null => {
+  const parsed = parseTomlObject(raw);
+  if (!parsed.ok) {
+    return null;
+  }
+  const table = parsed.value;
+  const install = isPlainObject(table.install) ? table.install : {};
+  if (codes.has("min-age.disabled")) {
+    install["minimum-release-age"] = cargoDuration(settings.minReleaseAgeDays);
+  }
+  table.install = install;
+  return `${stringifyToml(table).trimEnd()}\n`;
+};
+
+const parseBundleConfig = (raw: string): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const line of raw.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed === "---" || trimmed.startsWith("#")) {
+      continue;
+    }
+    const colon = trimmed.indexOf(":");
+    if (colon <= 0) {
+      continue;
+    }
+    const key = trimmed.slice(0, colon).trim();
+    let value = trimmed.slice(colon + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    out[key] = value;
+  }
+  return out;
+};
+
+const stringifyBundleConfig = (config: Record<string, string>): string => {
+  const lines = ["---"];
+  for (const [key, value] of Object.entries(config)) {
+    lines.push(`${key}: "${value}"`);
+  }
+  return `${lines.join("\n")}\n`;
+};
+
+const mergeBundleConfig = (
+  raw: string,
+  codes: Set<string>,
+  settings: ResolvedSettings
+): string => {
+  const config = parseBundleConfig(raw);
+  if (codes.has("min-age.disabled")) {
+    config["BUNDLE_COOLDOWN"] = String(settings.minReleaseAgeDays);
+  }
+  return stringifyBundleConfig(config);
 };
 
 const renderConfig = (
@@ -529,6 +633,12 @@ const renderConfig = (
   }
   if (manager === "bun") {
     return mergeBunfig(raw, codes, settings);
+  }
+  if (manager === "cargo") {
+    return mergeCargo(raw, codes, settings);
+  }
+  if (manager === "bundler") {
+    return mergeBundleConfig(raw, codes, settings);
   }
   return mergeUv(raw, codes, settings);
 };
@@ -574,6 +684,12 @@ const configPathFor = (
     }
     case "bun": {
       return localPath(project.root, "bunfig.toml");
+    }
+    case "cargo": {
+      return manager.configPath ?? localPath(project.root, ".cargo/config.toml");
+    }
+    case "bundler": {
+      return localPath(project.root, ".bundle/config");
     }
     case "uv": {
       return uvConfigPath(project, manager, readFile);

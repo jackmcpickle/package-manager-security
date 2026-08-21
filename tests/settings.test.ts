@@ -32,7 +32,7 @@ test("standard preset flags npm without ignore-scripts", () => {
 
 test("standard preset is quiet on ignore-scripts when set", () => {
   const files: Record<string, string> = {
-    "/p/.npmrc": `ignore-scripts=true\naudit=true\naudit-level=high\nmin-release-age=7\nregistry=https://registry.npmjs.org/\n`,
+    "/p/.npmrc": `ignore-scripts=true\nallow-scripts-pin=true\naudit=true\naudit-level=high\nmin-release-age=7\nregistry=https://registry.npmjs.org/\n`,
     "/p/package-lock.json": `{"lockfileVersion":3}`,
     "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
   };
@@ -56,12 +56,12 @@ const pnpmProject = (root: string): Project => ({
   root,
 });
 
-test("pnpm bare minimumReleaseAge is minutes so 1440 fails the standard 7-day bar", () => {
+test("pnpm bare minimumReleaseAge is minutes so 720 fails the standard 1-day bar", () => {
   const files: Record<string, string> = {
     "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
     "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
     "/p/pnpm-workspace.yaml":
-      "packages:\n  - '.'\nminimumReleaseAge: 1440\nonlyBuiltDependencies: []\n",
+      "packages:\n  - '.'\nminimumReleaseAge: 720\nonlyBuiltDependencies: []\n",
   };
   const findings = auditSettings(pnpmProject("/p"), loadPolicy({}), {
     readFile: (p) => files[p] ?? null,
@@ -69,12 +69,12 @@ test("pnpm bare minimumReleaseAge is minutes so 1440 fails the standard 7-day ba
   expect(findings.some((f) => f.code === "min-age.disabled")).toBe(true);
 });
 
-test("pnpm bare minimumReleaseAge of 10080 minutes meets the standard 7-day bar", () => {
+test("pnpm bare minimumReleaseAge of 1440 minutes meets the standard 1-day bar", () => {
   const files: Record<string, string> = {
     "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
     "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
     "/p/pnpm-workspace.yaml":
-      "packages:\n  - '.'\nminimumReleaseAge: 10080\nonlyBuiltDependencies: []\n",
+      "packages:\n  - '.'\nminimumReleaseAge: 1440\nonlyBuiltDependencies: []\n",
   };
   const findings = auditSettings(pnpmProject("/p"), loadPolicy({}), {
     readFile: (p) => files[p] ?? null,
@@ -106,7 +106,7 @@ test("leftover npm lockfile is a leftover finding and is not fixable", () => {
   const files: Record<string, string> = {
     "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
     "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
-    "/p/pnpm-workspace.yaml": "packages:\n  - '.'\nminimumReleaseAge: 10080\n",
+    "/p/pnpm-workspace.yaml": "packages:\n  - '.'\nminimumReleaseAge: 1440\n",
   };
   const findings = auditSettings(project, loadPolicy({}), {
     readFile: (p) => files[p] ?? null,
@@ -239,7 +239,7 @@ test("bun primary with bare bunfig.toml has no trustedDependencies so scripts ar
 test("bun primary fully configured is quiet under standard", () => {
   const files: Record<string, string> = {
     "/p/bun.lock": `{"lockfileVersion":1}`,
-    "/p/bunfig.toml": `trustedDependencies = ["foo"]\n\n[install]\nregistry = "https://registry.npmjs.org/"\nminimumReleaseAge = 604800\n`,
+    "/p/bunfig.toml": `trustedDependencies = ["foo"]\n\n[install]\nregistry = "https://registry.npmjs.org/"\nminimumReleaseAge = 86400\n`,
     "/p/package.json": `{"name":"x"}`,
   };
   const findings = auditSettings(bunProject("/p"), loadPolicy({}), {
@@ -271,7 +271,7 @@ test("uv primary with uv.lock absent emits lockfile.missing", () => {
 
 test("uv primary with compliant exclude-newer and lock present is quiet, and uv never emits pm.unpinned", () => {
   const files: Record<string, string> = {
-    "/p/pyproject.toml": `[tool.uv]\nexclude-newer = 30\n`,
+    "/p/pyproject.toml": `[tool.uv]\nexclude-newer = 30\n\n[tool.uv.audit]\nmalware-check = true\n`,
     "/p/uv.lock": `version = 1\n`,
   };
   const findings = auditSettings(uvProject("/p"), loadPolicy({}), {
@@ -292,10 +292,10 @@ test("uv primary missing exclude-newer emits min-age.disabled under standard", (
   expect(findings.some((f) => f.code === "min-age.disabled")).toBe(true);
 });
 
-test("uv exclude-newer as an ISO date ~1 day ago emits min-age.disabled under standard", () => {
-  const oneDayAgo = new Date(Date.now() - 1 * 86_400_000).toISOString();
+test("uv exclude-newer as an ISO date ~12 hours ago emits min-age.disabled under standard", () => {
+  const twelveHoursAgo = new Date(Date.now() - 12 * 3_600_000).toISOString();
   const files: Record<string, string> = {
-    "/p/pyproject.toml": `[tool.uv]\nexclude-newer = "${oneDayAgo}"\n`,
+    "/p/pyproject.toml": `[tool.uv]\nexclude-newer = "${twelveHoursAgo}"\n`,
     "/p/uv.lock": `version = 1\n`,
   };
   const findings = auditSettings(uvProject("/p"), loadPolicy({}), {
@@ -444,14 +444,14 @@ test("npm with no packageManager field emits pm.unpinned under standard", () => 
 });
 
 const validPnpmWorkspace =
-  "packages:\n  - '.'\nminimumReleaseAge: 10080\nonlyBuiltDependencies: []\naudit: true\naudit-level: high\nregistry: https://registry.npmjs.org/\n";
+  "packages:\n  - '.'\nminimumReleaseAge: 1440\nonlyBuiltDependencies: []\naudit: true\naudit-level: high\nregistry: https://registry.npmjs.org/\n";
 
 test("pnpm dangerouslyAllowAllBuilds true emits scripts.unrestricted under standard", () => {
   const files: Record<string, string> = {
     "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
     "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
     "/p/pnpm-workspace.yaml":
-      "packages:\n  - '.'\nminimumReleaseAge: 10080\naudit: true\naudit-level: high\nregistry: https://registry.npmjs.org/\ndangerouslyAllowAllBuilds: true\n",
+      "packages:\n  - '.'\nminimumReleaseAge: 1440\naudit: true\naudit-level: high\nregistry: https://registry.npmjs.org/\ndangerouslyAllowAllBuilds: true\n",
   };
   const findings = auditSettings(pnpmProject("/p"), loadPolicy({}), {
     readFile: (p) => files[p] ?? null,
@@ -475,7 +475,7 @@ test("pnpm with audit disabled emits audit.disabled under standard", () => {
     "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
     "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
     "/p/pnpm-workspace.yaml":
-      "packages:\n  - '.'\nminimumReleaseAge: 10080\nonlyBuiltDependencies: []\nregistry: https://registry.npmjs.org/\n",
+      "packages:\n  - '.'\nminimumReleaseAge: 1440\nonlyBuiltDependencies: []\nregistry: https://registry.npmjs.org/\n",
   };
   const findings = auditSettings(pnpmProject("/p"), loadPolicy({}), {
     readFile: (p) => files[p] ?? null,
@@ -488,7 +488,7 @@ test("pnpm with no registry emits registry.unpinned under standard", () => {
     "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
     "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
     "/p/pnpm-workspace.yaml":
-      "packages:\n  - '.'\nminimumReleaseAge: 10080\nonlyBuiltDependencies: []\naudit: true\naudit-level: high\n",
+      "packages:\n  - '.'\nminimumReleaseAge: 1440\nonlyBuiltDependencies: []\naudit: true\naudit-level: high\n",
   };
   const findings = auditSettings(pnpmProject("/p"), loadPolicy({}), {
     readFile: (p) => files[p] ?? null,
@@ -732,4 +732,76 @@ test("malformed yarn packageManager pin is unpinned", () => {
     readFile: (p) => files[p] ?? null,
   });
   expect(findings.some((f) => f.code === "pm.unpinned")).toBe(true);
+});
+
+const bundlerProject = (root: string): Project => ({
+  gitRoot: root,
+  managers: [
+    {
+      configPath: `${root}/.bundle/config`,
+      lockfilePath: `${root}/Gemfile.lock`,
+      manifestPath: `${root}/Gemfile`,
+      name: "bundler",
+      role: "primary",
+    },
+  ],
+  root,
+});
+
+test("bundler without BUNDLE_COOLDOWN emits min-age.disabled under standard", () => {
+  const files: Record<string, string> = {
+    "/r/Gemfile": 'source "https://rubygems.org"\n',
+    "/r/Gemfile.lock": "GEM\n",
+  };
+  const findings = auditSettings(bundlerProject("/r"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "min-age.disabled")).toBe(true);
+});
+
+test("bundler BUNDLE_COOLDOWN below preset emits min-age.disabled", () => {
+  const files: Record<string, string> = {
+    "/r/.bundle/config": '---\nBUNDLE_COOLDOWN: "0"\n',
+    "/r/Gemfile": 'source "https://rubygems.org"\n',
+    "/r/Gemfile.lock": "GEM\n",
+  };
+  const findings = auditSettings(bundlerProject("/r"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "min-age.disabled")).toBe(true);
+});
+
+test("bundler BUNDLE_COOLDOWN meeting standard preset is quiet", () => {
+  const files: Record<string, string> = {
+    "/r/.bundle/config": '---\nBUNDLE_COOLDOWN: "1"\n',
+    "/r/Gemfile": 'source "https://rubygems.org"\n',
+    "/r/Gemfile.lock": "GEM\n",
+  };
+  const findings = auditSettings(bundlerProject("/r"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.filter((f) => f.kind === "settings")).toEqual([]);
+});
+
+test("bundler without Gemfile.lock emits lockfile.missing", () => {
+  const project: Project = {
+    gitRoot: "/r",
+    managers: [
+      {
+        configPath: null,
+        lockfilePath: null,
+        manifestPath: "/r/Gemfile",
+        name: "bundler",
+        role: "primary",
+      },
+    ],
+    root: "/r",
+  };
+  const files: Record<string, string> = {
+    "/r/Gemfile": 'source "https://rubygems.org"\n',
+  };
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "lockfile.missing")).toBe(true);
 });

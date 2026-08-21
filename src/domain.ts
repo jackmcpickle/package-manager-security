@@ -4,9 +4,11 @@ export type PackageManager =
   | "yarn"
   | "bun"
   | "uv"
+  | "cargo"
   | "poetry"
   | "pip"
-  | "pipenv";
+  | "pipenv"
+  | "bundler";
 
 export type PresetName = "relaxed" | "standard" | "strict";
 
