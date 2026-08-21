@@ -1,10 +1,8 @@
-# pmguard
+# mailclad
 
-pmguard walks a folder of repos, finds each package-manager root, and audits it. It does not write files unless you pass an apply flag.
+mailclad walks a folder of repos, finds each package-manager root, and audits it. It does not write files unless you pass an apply flag.
 
 npm, pnpm, yarn Berry, bun, uv, cargo, bundler, and composer all go through the same path. Yarn v1 and Poetry, pip, or Pipenv projects get flagged. They do not get a live audit.
-
-This CLI is not the npm package [`pmguard`](https://www.npmjs.com/package/pmguard) that edits global tool configs. This one reads per-project settings and lockfiles.
 
 ## How an audit runs
 
@@ -34,9 +32,9 @@ Leftover lockfiles and Poetry, pip, or Pipenv never need a binary for this step.
 ### From npm (requires [Bun](https://bun.sh))
 
 ```bash
-bun install -g pmguard
+bun install -g mailclad
 # or
-npm install -g pmguard
+npm install -g mailclad
 ```
 
 The CLI runs on Bun, so Bun must be on your `PATH` either way.
@@ -45,34 +43,34 @@ The CLI runs on Bun, so Bun must be on your `PATH` either way.
 
 Grab the binary for your platform from the [releases page](https://github.com/jackmcpickle/package-manager-security/releases):
 
-- `pmguard-linux-x64` / `pmguard-linux-arm64`
-- `pmguard-darwin-x64` / `pmguard-darwin-arm64` (macOS)
-- `pmguard-windows-x64.exe`
+- `mailclad-linux-x64` / `mailclad-linux-arm64`
+- `mailclad-darwin-x64` / `mailclad-darwin-arm64` (macOS)
+- `mailclad-windows-x64.exe`
 
 Fair warning: they're about 100 MB each, since Bun's runtime is baked in.
 
 ```bash
-curl -fsSL -o pmguard https://github.com/jackmcpickle/package-manager-security/releases/latest/download/pmguard-darwin-arm64
-chmod +x pmguard
-./pmguard audit .
+curl -fsSL -o mailclad https://github.com/jackmcpickle/package-manager-security/releases/latest/download/mailclad-darwin-arm64
+chmod +x mailclad
+./mailclad audit .
 ```
 
 ## Usage
 
 ```bash
-pmguard audit [path]                 # audit only, never writes (default preset: standard)
-pmguard audit . --preset strict      # relaxed | standard | strict
-pmguard audit . --apply              # write settings fixes (clean git tree required)
-pmguard audit . --apply-advisories   # upgrade packages with known fixes (no major bumps)
-pmguard audit . -i                   # interactive: consent per repo
-pmguard audit . --json               # machine-readable output
-pmguard audit . --sarif              # SARIF output
-pmguard audit . --report out.md      # markdown report
+mailclad audit [path]                 # audit only, never writes (default preset: standard)
+mailclad audit . --preset strict      # relaxed | standard | strict
+mailclad audit . --apply              # write settings fixes (clean git tree required)
+mailclad audit . --apply-advisories   # upgrade packages with known fixes (no major bumps)
+mailclad audit . -i                   # interactive: consent per repo
+mailclad audit . --json               # machine-readable output
+mailclad audit . --sarif              # SARIF output
+mailclad audit . --report out.md      # markdown report
 ```
 
 Exit code `0` means every project passed. `1` means a policy failure, either settings drift or an advisory at or above the preset's gate. `2` means the run was incomplete: a missing binary, a dirty tree blocked an apply, an audit subprocess died, or no projects were found.
 
-Configuration lives in `~/.config/pmguard/config.toml`, plus `.pmguard.toml` at the scan root or in any repo. The closer file wins, and flags win over files.
+Configuration lives in `~/.config/mailclad/config.toml`, plus `.mailclad.toml` at the scan root or in any repo. The closer file wins, and flags win over files.
 
 The default **standard** preset requires a **1-day** release-age gate (`minReleaseAgeDays: 1`); **strict** requires 14 days, **relaxed** turns the gate off (0 days).
 
@@ -119,12 +117,12 @@ Manager-specific checks beyond the baseline:
 Checks are version-aware. pnpm 11 turns `minimumReleaseAge` on at 1440 minutes
 and yarn defaults `npmMinimalAgeGate` to `1w` and `enableScripts` to `false`, so
 a missing key on those versions is reported as `info` ("you're relying on a safe
-default") rather than `high`. pmguard reads the version from the `packageManager`
+default") rather than `high`. mailclad reads the version from the `packageManager`
 field in `package.json`; with no pin it assumes a current release.
 
 ## Advisory audits
 
-When settings pass, pmguard also scans lockfiles for known vulnerabilities at or
+When settings pass, mailclad also scans lockfiles for known vulnerabilities at or
 above the preset's advisory gate (`high` for standard, `moderate` for strict,
 `critical` for relaxed). It shells out to each manager's native audit where
 available:
@@ -157,14 +155,14 @@ CI runs on GitHub Actions (`.github/workflows/ci.yml`): tests with coverage, lin
 ### Build
 
 ```bash
-bun run build          # bundle to dist/pmguard.js (the npm bin, runs on Bun)
-bun run build:binary   # compile a standalone binary to dist/pmguard for this machine
+bun run build          # bundle to dist/mailclad.js (the npm bin, runs on Bun)
+bun run build:binary   # compile a standalone binary to dist/mailclad for this machine
 ```
 
 To cross-compile for another platform:
 
 ```bash
-bun build ./src/main.ts --compile --target=bun-linux-x64 --outfile dist/pmguard-linux-x64
+bun build ./src/main.ts --compile --target=bun-linux-x64 --outfile dist/mailclad-linux-x64
 ```
 
 Targets: `bun-linux-x64`, `bun-linux-arm64`, `bun-darwin-x64`, `bun-darwin-arm64`, `bun-windows-x64`.
@@ -174,7 +172,7 @@ Targets: `bun-linux-x64`, `bun-linux-arm64`, `bun-darwin-x64`, `bun-darwin-arm64
 Releases are automated from conventional commits on `main`.
 
 1. **`.github/workflows/publish.yml`** — on push to `main` (when `src/` or `package.json` changes), runs tests, then `commit-and-tag-version` to bump the version, update `CHANGELOG.md`, and push the release commit + tag. Release commits use `[skip ci]` so they don't re-trigger the workflow.
-2. **`.github/workflows/release.yml`** — on tag push (`v*`), creates the GitHub release (notes from `CHANGELOG.md`), attaches standalone binaries for all five platforms, and publishes `pmguard` to npm.
+2. **`.github/workflows/release.yml`** — on tag push (`v*`), creates the GitHub release (notes from `CHANGELOG.md`), attaches standalone binaries for all five platforms, and publishes `mailclad` to npm.
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) so release notes are generated correctly:
 
@@ -197,7 +195,7 @@ git push --follow-tags
 |---|---|---|
 | `DEPLOY_KEY` | publish | SSH deploy key with bypass so the release commit/tag can push to protected `main` |
 
-npm publishing uses [OIDC trusted publishing](https://docs.npmjs.com/trusted-publishers) — no `NPM_TOKEN` secret required. Ensure `jackmcpickle/package-manager-security` → `.github/workflows/release.yml` is configured as a trusted publisher for `pmguard` on npmjs.com.
+npm publishing uses [OIDC trusted publishing](https://docs.npmjs.com/trusted-publishers) — no `NPM_TOKEN` secret required. Ensure `jackmcpickle/package-manager-security` → `.github/workflows/release.yml` is configured as a trusted publisher for `mailclad` on npmjs.com.
 
 ## License
 

@@ -18,7 +18,7 @@ import type { DetectedManager, Finding, Project } from "../src/domain";
 import { loadPolicy } from "../src/policy";
 import { memoryFs } from "./helpers/memory-fs";
 
-const cacheDir = mkdtempSync(nodePath.join(tmpdir(), "pmguard-task10-cache-"));
+const cacheDir = mkdtempSync(nodePath.join(tmpdir(), "mailclad-task10-cache-"));
 afterAll(() => {
   rmSync(cacheDir, { force: true, recursive: true });
 });
@@ -53,7 +53,7 @@ const emptyAuditRun = () => () => ({
   stdout: `{"advisories":{}}`,
 });
 
-test("pmguard with no args prints usage and exits 2", async () => {
+test("mailclad with no args prints usage and exits 2", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const result = await run([], {
@@ -63,7 +63,7 @@ test("pmguard with no args prints usage and exits 2", async () => {
     stdout: { write: (s: string) => stdout.push(s) },
   });
   expect(result.exitCode).toBe(2);
-  expect(stderr.join("")).toContain("Usage: pmguard");
+  expect(stderr.join("")).toContain("Usage: mailclad");
 });
 
 test("audit of a fixture repo with open npm scripts exits 1 and lists the finding", async () => {
@@ -90,7 +90,7 @@ test("audit of a fixture repo with open npm scripts exits 1 and lists the findin
   expect(stdout.join("")).toContain("scripts.unrestricted");
 });
 
-test("CLI --preset wins over repo .pmguard.toml preset", async () => {
+test("CLI --preset wins over repo .mailclad.toml preset", async () => {
   const root = nodePath.join(import.meta.dir, "fixtures/audit/flag-wins");
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -904,7 +904,7 @@ test("--apply on a poetry project never runs uv migrate commands", async () => {
   ).toBe(false);
 });
 
-test("XDG_CONFIG_HOME wins over ~/.config/pmguard when CLI loads user config", async () => {
+test("XDG_CONFIG_HOME wins over ~/.config/mailclad when CLI loads user config", async () => {
   mkdirSync(
     nodePath.join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"),
     {
@@ -915,16 +915,16 @@ test("XDG_CONFIG_HOME wins over ~/.config/pmguard when CLI loads user config", a
     import.meta.dir,
     "fixtures/discover/many-repos/alpha"
   );
-  const home = mkdtempSync(nodePath.join(tmpdir(), "pmguard-home-"));
-  const xdg = mkdtempSync(nodePath.join(tmpdir(), "pmguard-xdg-"));
-  mkdirSync(nodePath.join(home, ".config", "pmguard"), { recursive: true });
-  mkdirSync(nodePath.join(xdg, "pmguard"), { recursive: true });
+  const home = mkdtempSync(nodePath.join(tmpdir(), "mailclad-home-"));
+  const xdg = mkdtempSync(nodePath.join(tmpdir(), "mailclad-xdg-"));
+  mkdirSync(nodePath.join(home, ".config", "mailclad"), { recursive: true });
+  mkdirSync(nodePath.join(xdg, "mailclad"), { recursive: true });
   writeFileSync(
-    nodePath.join(home, ".config", "pmguard", "config.toml"),
+    nodePath.join(home, ".config", "mailclad", "config.toml"),
     `preset = "standard"\n`
   );
   writeFileSync(
-    nodePath.join(xdg, "pmguard", "config.toml"),
+    nodePath.join(xdg, "mailclad", "config.toml"),
     `preset = "relaxed"\n`
   );
   const stdout: string[] = [];
@@ -989,7 +989,7 @@ test("--report creates missing parent directories and writes markdown", async ()
     import.meta.dir,
     "fixtures/discover/many-repos/alpha"
   );
-  const outDir = mkdtempSync(nodePath.join(tmpdir(), "pmguard-report-"));
+  const outDir = mkdtempSync(nodePath.join(tmpdir(), "mailclad-report-"));
   const reportPath = nodePath.join(outDir, "nested", "deep", "report.md");
   const result = await run(["audit", root, "--report", reportPath], {
     cache: createFsCache(

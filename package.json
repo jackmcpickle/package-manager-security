@@ -1,5 +1,5 @@
 {
-  "name": "pmguard",
+  "name": "mailclad",
   "version": "0.1.0",
   "description": "Audit package-manager security settings and advisories across monorepos and folders of projects. Supports npm, pnpm, yarn, bun, uv, cargo, and bundler.",
   "keywords": [
@@ -23,10 +23,10 @@
     "url": "git+https://github.com/jackmcpickle/package-manager-security.git"
   },
   "bin": {
-    "pmguard": "./dist/pmguard.js"
+    "mailclad": "./dist/mailclad.js"
   },
   "files": [
-    "dist/pmguard.js",
+    "dist/mailclad.js",
     "README.md"
   ],
   "type": "module",
@@ -39,8 +39,8 @@
     "coverage:check": "bun scripts/check-coverage.ts",
     "coverage:write": "bun scripts/check-coverage.ts --write",
     "typecheck": "tsc --noEmit",
-    "build": "bun build ./src/main.ts --target=bun --banner '#!/usr/bin/env bun' --outfile dist/pmguard.js",
-    "build:binary": "bun build ./src/main.ts --compile --outfile dist/pmguard",
+    "build": "bun build ./src/main.ts --target=bun --banner '#!/usr/bin/env bun' --outfile dist/mailclad.js",
+    "build:binary": "bun build ./src/main.ts --compile --outfile dist/mailclad",
     "prepublishOnly": "bun test && bun run build",
     "check": "ultracite check",
     "check:type-aware": "ultracite check --type-aware",

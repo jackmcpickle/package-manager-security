@@ -1,12 +1,12 @@
-# pmguard Implementation Plan
+# mailclad Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
 > REQUIRED: Follow TDD (`red → green`). No production code without a failing test first, except generated/config files listed in a task as scaffold. Test only at the **Seams** section. Do not commit unless the task step says to and the controller allowed commits.
 
-**Goal:** Ship `pmguard`, a local CLI that audits package-manager security settings and advisories across monorepos and folders of many projects, and applies fixes only when explicitly asked.
+**Goal:** Ship `mailclad`, a local CLI that audits package-manager security settings and advisories across monorepos and folders of many projects, and applies fixes only when explicitly asked.
 
-**Architecture:** Bun + TypeScript library with a thin CLI. File-based settings checks need no PM binary. Advisories and migrate shell out through injected runners. Policy is layered TOML. Discovery is hybrid (git repos → workspace/PM roots). Cache lives in `~/.cache/pmguard/` (overridable). Apply is serial; audit concurrency defaults to 4.
+**Architecture:** Bun + TypeScript library with a thin CLI. File-based settings checks need no PM binary. Advisories and migrate shell out through injected runners. Policy is layered TOML. Discovery is hybrid (git repos → workspace/PM roots). Cache lives in `~/.cache/mailclad/` (overridable). Apply is serial; audit concurrency defaults to 4.
 
 **Tech Stack:** TypeScript, Bun (runtime + `bun test` + compile to binary), `@std/toml` or `smol-toml` for parse/stringify, no JS/TS policy files.
 
@@ -14,15 +14,15 @@
 
 ## Global Constraints
 
-- Binary / package name: `pmguard`
+- Binary / package name: `mailclad`
 - Audit is default and never writes. `--apply` writes settings only. `--apply-advisories` upgrades dependencies. `-i` / `--interactive` can write after per-repo consent without also passing `--apply`.
 - Apply (and interactive) is always serial. Audit default `--concurrency 4`. `--concurrency 1` is serial audit.
 - Apply requires a clean git tree unless `--force`. `--commit` is opt-in, one commit per repo. Audit-only ignores dirty.
 - Exit codes: `0` = every project that ran passed the gate; `1` = policy failure (settings drift or above-gate advisory); `2` = incomplete (missing binary, apply skipped-dirty, audit subprocess died). Warnings never become `1`.
 - Presets: `relaxed` | `standard` | `strict`. Default `standard`.
 - Advisory gate: `relaxed` = critical only; `standard` = high+critical; `strict` = moderate+. uv deprecation/quarantine always count as findings.
-- Config files: user `~/.config/pmguard/config.toml` (or `$XDG_CONFIG_HOME/pmguard/config.toml`); scan-root and per-repo `.pmguard.toml`. Closer wins. Flags win over files. Per-PM tables: `[npm]`, `[pnpm]`, `[yarn]`, `[bun]`, `[uv]`. Never execute JS/TS config.
-- Cache dir: `~/.cache/pmguard/` (or `$XDG_CACHE_HOME/pmguard/`). Lockfile-digest entries + shared package@version. Do not write into `uv cache` or the pnpm store. `--refresh` / `--no-cache` bypass. Settings checks never use the advisory cache.
+- Config files: user `~/.config/mailclad/config.toml` (or `$XDG_CONFIG_HOME/mailclad/config.toml`); scan-root and per-repo `.mailclad.toml`. Closer wins. Flags win over files. Per-PM tables: `[npm]`, `[pnpm]`, `[yarn]`, `[bun]`, `[uv]`. Never execute JS/TS config.
+- Cache dir: `~/.cache/mailclad/` (or `$XDG_CACHE_HOME/mailclad/`). Lockfile-digest entries + shared package@version. Do not write into `uv cache` or the pnpm store. `--refresh` / `--no-cache` bypass. Settings checks never use the advisory cache.
 - Lockfile-digest + TTL hit may skip a live advisory run. Package@version hits are preview only; live audit still runs. Process waits for live before finalizing that repo, exit code, and reports. Live wins; cache updates.
 - Write rule: prefer the existing correct file for that PM; create it if missing; never write user-global PM config (`~/.npmrc`, user `uv.toml`).
 - npm settings file: `.npmrc`. pnpm settings file: `pnpm-workspace.yaml` (not `.npmrc`, not the lockfile). Yarn Berry: `.yarnrc.yml` (not `yarn.lock`). bun: `bunfig.toml`. uv: `uv.toml` or `[tool.uv]` in `pyproject.toml` if that is where config already lives.
@@ -162,7 +162,7 @@ Finding codes used by tests (do not invent aliases):
 import { expect, test } from "bun:test";
 import { run } from "../src/cli";
 
-test("pmguard with no args prints usage and exits 2", async () => {
+test("mailclad with no args prints usage and exits 2", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const result = await run([], {
@@ -172,7 +172,7 @@ test("pmguard with no args prints usage and exits 2", async () => {
     env: {},
   });
   expect(result.exitCode).toBe(2);
-  expect(stderr.join("")).toContain("Usage: pmguard");
+  expect(stderr.join("")).toContain("Usage: mailclad");
 });
 ```
 
@@ -187,18 +187,18 @@ Expected: FAIL because `../src/cli` does not exist or `run` is not exported.
 
 ```json
 {
-  "name": "pmguard",
+  "name": "mailclad",
   "version": "0.1.0",
   "type": "module",
-  "bin": { "pmguard": "./src/main.ts" },
+  "bin": { "mailclad": "./src/main.ts" },
   "scripts": {
     "test": "bun test",
-    "build": "bun build ./src/main.ts --compile --outfile dist/pmguard"
+    "build": "bun build ./src/main.ts --compile --outfile dist/mailclad"
   }
 }
 ```
 
-`src/cli.ts` — `run([])` returns `{ exitCode: 2 }` and writes `Usage: pmguard <command>` to stderr. Do not implement `audit` yet.
+`src/cli.ts` — `run([])` returns `{ exitCode: 2 }` and writes `Usage: mailclad <command>` to stderr. Do not implement `audit` yet.
 
 `src/domain.ts` — export the types from Domain types. No runtime logic.
 
@@ -215,7 +215,7 @@ Expected: PASS, output pristine.
 
 ```bash
 git add package.json tsconfig.json bunfig.toml .gitignore src/domain.ts src/main.ts src/cli.ts tests/cli.test.ts
-git commit -m "feat: scaffold pmguard CLI with usage exit"
+git commit -m "feat: scaffold mailclad CLI with usage exit"
 ```
 
 ---
@@ -302,7 +302,7 @@ Expected: PASS.
 
 ```bash
 git add src/policy.ts tests/policy.test.ts package.json bun.lock
-git commit -m "feat: load layered pmguard policy from TOML and flags"
+git commit -m "feat: load layered mailclad policy from TOML and flags"
 ```
 
 ---
@@ -833,12 +833,12 @@ export function formatHuman(result: ReturnType<typeof auditPath>): string
 CLI:
 
 ```
-pmguard audit [path] [--preset standard] [--apply] [--apply-advisories] [-i] [--concurrency 4] [--json] [--sarif] [--report file.md] [--force] [--commit] [--refresh] [--no-cache] [--allow-majors]
+mailclad audit [path] [--preset standard] [--apply] [--apply-advisories] [-i] [--concurrency 4] [--json] [--sarif] [--report file.md] [--force] [--commit] [--refresh] [--no-cache] [--allow-majors]
 ```
 
-This task implements `pmguard audit [path]` **settings + preflight only** (ignore apply flags: if `--apply` is passed, print to stderr `apply is not implemented` and still run audit / exit 2). Default path: cwd.
+This task implements `mailclad audit [path]` **settings + preflight only** (ignore apply flags: if `--apply` is passed, print to stderr `apply is not implemented` and still run audit / exit 2). Default path: cwd.
 
-Policy files: read `XDG_CONFIG_HOME/pmguard/config.toml` or `HOME/.config/pmguard/config.toml`, then `<path>/.pmguard.toml`, then each project `.pmguard.toml`.
+Policy files: read `XDG_CONFIG_HOME/mailclad/config.toml` or `HOME/.config/mailclad/config.toml`, then `<path>/.mailclad.toml`, then each project `.mailclad.toml`.
 
 Exit: if any settings finding has severity at/above the gate (`standard`: high+critical; leftover `high` counts), exit `1`. If any `missing-binary` and no policy failures, exit `0` (warning). If discovery finds zero projects, exit `2`.
 
@@ -882,7 +882,7 @@ Expected: PASS.
 
 ```bash
 git add src/cli.ts src/audit.ts src/report.ts tests/cli.test.ts tests/report.test.ts tests/fixtures
-git commit -m "feat: pmguard audit reports settings findings and exit codes"
+git commit -m "feat: mailclad audit reports settings findings and exit codes"
 ```
 
 ---
@@ -940,7 +940,7 @@ TTL constant: `86_400_000`.
 ```ts
 test("identical lockfile digest within TTL skips the live runner", async () => {
   const calls: string[][] = [];
-  const cache = createFsCache("/tmp/pmguard-test-cache", () => 1_000, 86_400_000);
+  const cache = createFsCache("/tmp/mailclad-test-cache", () => 1_000, 86_400_000);
   const project = /* pnpm primary with lockfilePath /p/pnpm-lock.yaml */;
   const deps = {
     cache,
@@ -962,7 +962,7 @@ test("identical lockfile digest within TTL skips the live runner", async () => {
 
 test("package@version cache hit still runs live audit", async () => {
   const calls: string[][] = [];
-  const cache = createFsCache("/tmp/pmguard-test-cache2", () => 1_000, 86_400_000);
+  const cache = createFsCache("/tmp/mailclad-test-cache2", () => 1_000, 86_400_000);
   cache.putPackage("left-pad", "1.0.0", [{ name: "left-pad", version: "1.0.0", severity: "high", id: "GHSA-x" }]);
   // project lockfile digest unique
   const result = await auditAdvisories(project, loadPolicy({}), {
@@ -989,7 +989,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Use a temp dir in tests; do not touch the real `~/.cache/pmguard` from tests.
+Use a temp dir in tests; do not touch the real `~/.cache/mailclad` from tests.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1233,7 +1233,7 @@ git commit -m "feat: apply advisory upgrades and emit json sarif markdown report
 
 ## Phase 2 (not this plan)
 
-GitHub Action workflow presets (`standard` / `strict` / `relaxed`) that run `pmguard audit` and fail on exit 1 (and optionally 2).
+GitHub Action workflow presets (`standard` / `strict` / `relaxed`) that run `mailclad audit` and fail on exit 1 (and optionally 2).
 
 ## Self-review
 

@@ -9,7 +9,7 @@ import { createFsCache } from "../src/cache";
 import type { Finding, PackageManager, Project } from "../src/domain";
 import { loadPolicy } from "../src/policy";
 
-const cacheDir = mkdtempSync(path.join(tmpdir(), "pmguard-apply-adv-"));
+const cacheDir = mkdtempSync(path.join(tmpdir(), "mailclad-apply-adv-"));
 afterAll(() => {
   rmSync(cacheDir, { force: true, recursive: true });
 });

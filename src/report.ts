@@ -1,3 +1,4 @@
+import { APP_NAME } from "./app-name";
 import type { AuditResult } from "./audit";
 import type { Finding, Severity } from "./domain";
 
@@ -57,7 +58,7 @@ export const formatJson = (result: AuditResult): string =>
   `${JSON.stringify(result)}\n`;
 
 export const formatMarkdown = (result: AuditResult): string => {
-  const lines = ["# pmguard report", ""];
+  const lines = [`# ${APP_NAME} report`, ""];
   for (const { project, findings } of result.projects) {
     lines.push(`## ${project.root}`);
     if (findings.length === 0) {
@@ -99,7 +100,7 @@ export const formatSarif = (result: AuditResult): string => {
     runs: [
       {
         results,
-        tool: { driver: { name: "pmguard", rules } },
+        tool: { driver: { name: APP_NAME, rules } },
       },
     ],
     version: "2.1.0",

@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 
+import { APP_NAME, CONFIG_FILE_NAME } from "./app-name";
 import type { ApplyPrompt } from "./apply-advisories";
 import { auditPath, defaultDigest } from "./audit";
 import type { AuditResult, AuditRun } from "./audit";
@@ -136,14 +137,14 @@ const baseDir = (xdg: string | undefined, fallback: string): string =>
 const userConfigPath = (env: Record<string, string | undefined>): string =>
   path.join(
     baseDir(env.XDG_CONFIG_HOME, path.join(env.HOME ?? "", ".config")),
-    "pmguard",
+    APP_NAME,
     "config.toml"
   );
 
 const userCachePath = (env: Record<string, string | undefined>): string =>
   path.join(
     baseDir(env.XDG_CACHE_HOME, path.join(env.HOME ?? "", ".cache")),
-    "pmguard"
+    APP_NAME
   );
 
 const isPresetName = (value: string | undefined): value is PresetName =>
@@ -488,7 +489,7 @@ export const run = async (
   const { cwd, env, stderr, stdout } = resolveIo(deps);
 
   if (argv[0] !== "audit") {
-    stderr.write("Usage: pmguard <command>\n");
+    stderr.write(`Usage: ${APP_NAME} <command>\n`);
     return { exitCode: 2 };
   }
 
@@ -497,7 +498,7 @@ export const run = async (
 
   const policy = loadPolicy({
     flags: presetFlags(flags.preset),
-    scanToml: readFile(path.join(root, ".pmguard.toml")) ?? undefined,
+    scanToml: readFile(path.join(root, CONFIG_FILE_NAME)) ?? undefined,
     userToml: readFile(userConfigPath(env)) ?? undefined,
   });
 

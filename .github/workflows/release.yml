@@ -51,15 +51,15 @@ jobs:
       matrix:
         include:
           - target: bun-linux-x64
-            artifact: pmguard-linux-x64
+            artifact: mailclad-linux-x64
           - target: bun-linux-arm64
-            artifact: pmguard-linux-arm64
+            artifact: mailclad-linux-arm64
           - target: bun-darwin-x64
-            artifact: pmguard-darwin-x64
+            artifact: mailclad-darwin-x64
           - target: bun-darwin-arm64
-            artifact: pmguard-darwin-arm64
+            artifact: mailclad-darwin-arm64
           - target: bun-windows-x64
-            artifact: pmguard-windows-x64.exe
+            artifact: mailclad-windows-x64.exe
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2

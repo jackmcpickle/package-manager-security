@@ -1,5 +1,6 @@
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
+import { APP_NAME } from "./app-name";
 import { parseBundleConfig, stringifyBundleConfig } from "./bundle-config";
 import {
   mergeComposerManifest,
@@ -36,7 +37,7 @@ export interface ApplySettingsItem {
   policy: Policy;
 }
 
-const COMMIT_MESSAGE = "chore: apply pmguard security settings";
+const COMMIT_MESSAGE = `chore: apply ${APP_NAME} security settings`;
 
 interface ResolvedSettings {
   minReleaseAgeDays: number;

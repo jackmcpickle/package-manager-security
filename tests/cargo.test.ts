@@ -12,7 +12,7 @@ import { loadPolicy } from "../src/policy";
 import { auditSettings } from "../src/settings";
 import { memoryFs } from "./helpers/memory-fs";
 
-const cacheRoot = mkdtempSync(path.join(tmpdir(), "pmguard-test-cargo-"));
+const cacheRoot = mkdtempSync(path.join(tmpdir(), "mailclad-test-cargo-"));
 
 afterAll(() => {
   rmSync(cacheRoot, { force: true, recursive: true });

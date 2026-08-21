@@ -118,7 +118,7 @@ for everything else are skipped by default.
 
 ---
 
-## 4. Gaps this opened in pmguard
+## 4. Gaps this opened in mailclad
 
 All resolved — see `src/settings.ts`, `src/apply-settings.ts`, and
 `tests/settings-modern.test.ts`. Kept here as the rationale for each check.
@@ -167,7 +167,7 @@ now pins that.
 ## 6. Severity model
 
 Two of these managers ship the safe behaviour as a default, which makes "key is
-absent" ambiguous. pmguard resolves it by version, read from the `packageManager`
+absent" ambiguous. mailclad resolves it by version, read from the `packageManager`
 pin in `package.json`:
 
 - Explicitly unsafe value (`enableScripts: true`, `dangerouslyAllowAllBuilds:
@@ -177,7 +177,7 @@ pin in `package.json`:
   Still auto-fixable, since writing the explicit value is equivalent.
 - Key absent, and the default is unsafe or predates the feature → **high**.
 
-With no `packageManager` pin, pmguard assumes a current release; the existing
+With no `packageManager` pin, mailclad assumes a current release; the existing
 `pm.unpinned` finding already covers the missing pin itself.
 
 ## Sources
