@@ -1,9 +1,22 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_call:
+    inputs:
+      tag:
+        description: Git tag to release (e.g. v0.1.3)
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Git tag to release (e.g. v0.1.3)
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -13,6 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun test
@@ -22,27 +37,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
       - name: Create GitHub release
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          notes_file="$(mktemp)"
-          if [ -f CHANGELOG.md ] && awk "/^## ${version} /{found=1; next} found && /^## /{exit} found" CHANGELOG.md | sed '/./,$!d' > "$notes_file" && [ -s "$notes_file" ]; then
-            echo "Using CHANGELOG.md for release notes"
-          else
-            echo "No CHANGELOG entry for v${version}; falling back to generated notes" > "$notes_file"
-            gh api "repos/${{ github.repository }}/releases/generate-notes" \
-              -f tag_name="$GITHUB_REF_NAME" \
-              -f target_commitish="${{ github.sha }}" \
-              --jq .body >> "$notes_file"
-          fi
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release edit "$GITHUB_REF_NAME" --notes-file "$notes_file"
-          else
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "$notes_file"
-          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          notes_file="$(mktemp)"
+          changelog_file="$(mktemp)"
+          git fetch --depth 1 origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          if git show "${TAG}:CHANGELOG.md" > "$changelog_file" && bun scripts/release-notes.ts "$version" "$changelog_file" > "$notes_file"; then
+            echo "Using CHANGELOG.md for release notes"
+          else
+            echo "No CHANGELOG entry for ${TAG}; falling back to generated notes" > "$notes_file"
+            gh api "repos/${{ github.repository }}/releases/generate-notes" \
+              -f tag_name="$TAG" \
+              -f target_commitish="$TAG" \
+              --jq .body >> "$notes_file"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file "$notes_file"
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file "$notes_file"
+          fi
 
   binaries:
     needs: create-release
@@ -62,13 +81,16 @@ jobs:
             artifact: mailclad-windows-x64.exe
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun build ./src/main.ts --compile --target=${{ matrix.target }} --outfile dist/${{ matrix.artifact }}
       - name: Attach binary to release
-        run: gh release upload "$GITHUB_REF_NAME" "dist/${{ matrix.artifact }}" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" "dist/${{ matrix.artifact }}" --clobber
 
   npm-publish:
     needs: test
@@ -78,6 +100,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
       - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v4
         with:
