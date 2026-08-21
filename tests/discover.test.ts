@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 
+import { bunFiles } from "../src/bun-host";
 import { discoverProjects } from "../src/discover";
 import { loadPolicy } from "../src/policy";
 import { auditSettings } from "../src/settings";
@@ -20,14 +21,14 @@ for (const rel of [
 }
 
 test("a folder of git repos yields one project per repo", () => {
-  const projects = discoverProjects(path.join(FIX, "many-repos"));
+  const projects = discoverProjects(path.join(FIX, "many-repos"), bunFiles);
   const roots = projects.map((p) => p.root.split("/").at(-1)).toSorted();
   expect(roots).toEqual(["alpha", "beta"]);
 });
 
 test("leftover package-lock beside pnpm is leftover npm not a second apply target", () => {
-  const beta = discoverProjects(path.join(FIX, "many-repos")).find((p) =>
-    p.root.endsWith("beta")
+  const beta = discoverProjects(path.join(FIX, "many-repos"), bunFiles).find(
+    (p) => p.root.endsWith("beta")
   );
   expect(
     beta?.managers.some((m) => m.name === "pnpm" && m.role === "primary")
@@ -38,7 +39,7 @@ test("leftover package-lock beside pnpm is leftover npm not a second apply targe
 });
 
 test("monorepo workspace packages without their own config are not separate projects", () => {
-  const projects = discoverProjects(path.join(FIX, "monorepo"));
+  const projects = discoverProjects(path.join(FIX, "monorepo"), bunFiles);
   expect(projects).toHaveLength(1);
   expect(
     projects[0]?.managers.some((m) => m.name === "pnpm" && m.role === "primary")
@@ -46,7 +47,7 @@ test("monorepo workspace packages without their own config are not separate proj
 });
 
 test("nested package with its own .npmrc is a separate PM root", () => {
-  const projects = discoverProjects(path.join(FIX, "nested-npmrc"));
+  const projects = discoverProjects(path.join(FIX, "nested-npmrc"), bunFiles);
   expect(projects).toHaveLength(2);
   const names = projects.map((p) => p.root.split("/").at(-1)).toSorted();
   expect(names).toEqual(["app", "nested-npmrc"]);
@@ -230,7 +231,7 @@ test("standalone uv.toml is not a uv primary", () => {
 });
 
 test("poetry project is detected and flagged as not using uv", () => {
-  const projects = discoverProjects(path.join(FIX, "poetry-app"));
+  const projects = discoverProjects(path.join(FIX, "poetry-app"), bunFiles);
   expect(
     projects[0]?.managers.some(
       (m) => m.name === "poetry" && m.role === "primary"

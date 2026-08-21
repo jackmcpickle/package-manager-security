@@ -432,6 +432,7 @@ test("apply-advisories without version maps upgrades from advisory JSON fields",
   const result = await auditPath("/p", {
     concurrency: 1,
     deps: {
+      digest: (bytes) => bytes,
       ...memoryTree(files, ["/p/.git"]),
       cache: createMemoryCache(() => 1000, 86_400_000),
       now: () => 1000,
@@ -512,6 +513,7 @@ test("--apply --apply-advisories still applies advisories after the settings wri
   const result = await auditPath("/p", {
     concurrency: 1,
     deps: {
+      digest: (bytes) => bytes,
       ...memoryTree(files, ["/p/.git"]),
       cache: createMemoryCache(() => 1000, 86_400_000),
       now: () => 1000,
@@ -563,6 +565,7 @@ test("interactive both applies advisories after the settings write dirties the t
   const result = await auditPath("/p", {
     concurrency: 1,
     deps: {
+      digest: (bytes) => bytes,
       ...memoryTree(files, ["/p/.git"]),
       cache: createMemoryCache(() => 1000, 86_400_000),
       now: () => 1000,
@@ -611,6 +614,7 @@ test("interactive advisories choice allows a major upgrade", async () => {
   await auditPath("/p", {
     concurrency: 1,
     deps: {
+      digest: (bytes) => bytes,
       ...memoryTree(files, ["/p/.git"]),
       cache: createMemoryCache(() => 1000, 86_400_000),
       now: () => 1000,
@@ -678,6 +682,7 @@ test("audit concurrency pools advisory runs and keeps apply serial", async () =>
   const result = await auditPath("/repo", {
     concurrency: 2,
     deps: {
+      digest: (bytes) => bytes,
       ...memoryTree(files, ["/repo/.git"]),
       cache: createMemoryCache(() => 1000, 86_400_000),
       currentVersions: { "left-pad": "1.0.0" },

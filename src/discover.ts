@@ -1,4 +1,3 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { parse as parseToml } from "smol-toml";
@@ -12,9 +11,9 @@ import type {
 import { profileFor } from "./managers/profile";
 
 export interface DiscoverFs {
-  readDir?: (dir: string) => string[];
-  readFile?: (path: string) => string | null;
-  isDir?: (path: string) => boolean;
+  readDir: (dir: string) => string[];
+  readFile: (path: string) => string | null;
+  isDir: (path: string) => boolean;
 }
 
 const SKIP_DIRS = new Set([
@@ -69,34 +68,10 @@ const hasRequirementsTxt = (names: Set<string>): boolean => {
   return false;
 };
 
-const defaultReadDir = (dir: string): string[] => {
-  try {
-    return readdirSync(dir);
-  } catch {
-    return [];
-  }
-};
-
-const defaultReadFile = (filePath: string): string | null => {
-  try {
-    return readFileSync(filePath, "utf-8");
-  } catch {
-    return null;
-  }
-};
-
-const defaultIsDir = (dir: string): boolean => {
-  try {
-    return statSync(dir).isDirectory();
-  } catch {
-    return false;
-  }
-};
-
-const resolveFs = (opts?: DiscoverFs): Fs => ({
-  isDir: opts?.isDir ?? defaultIsDir,
-  readDir: opts?.readDir ?? defaultReadDir,
-  readFile: opts?.readFile ?? defaultReadFile,
+const resolveFs = (opts: DiscoverFs): Fs => ({
+  isDir: opts.isDir,
+  readDir: opts.readDir,
+  readFile: opts.readFile,
 });
 
 const readPyproject = (dir: string, fs: Fs): Record<string, unknown> | null => {
@@ -756,10 +731,7 @@ const detectManagers = (dir: string, fs: Fs): DetectedManager[] => {
   return managers;
 };
 
-export const discoverProjects = (
-  root: string,
-  opts?: DiscoverFs
-): Project[] => {
+export const discoverProjects = (root: string, opts: DiscoverFs): Project[] => {
   const fs = resolveFs(opts);
   const repos = findRepoTrees(root, fs);
   const projects: Project[] = [];

@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-
 import { parse as parseTomlRaw } from "smol-toml";
 
 import { parseBundleConfig } from "./bundle-config";
@@ -22,7 +20,7 @@ import { resolveSettings } from "./policy";
 import type { ResolvedSettings } from "./policy";
 
 export interface SettingsFs {
-  readFile?: (path: string) => string | null;
+  readFile: (path: string) => string | null;
 }
 
 type ReadFile = (path: string) => string | null;
@@ -84,14 +82,6 @@ const MINUTES_PER_DAY = 24 * 60;
 const SECONDS_PER_DAY = 86_400;
 
 const MS_PER_DAY = 86_400_000;
-
-const defaultReadFile = (path: string): string | null => {
-  try {
-    return readFileSync(path, "utf-8");
-  } catch {
-    return null;
-  }
-};
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -2363,9 +2353,9 @@ const managerFindings = (
 export const auditSettings = (
   project: Project,
   policy: Policy,
-  opts?: SettingsFs
+  opts: SettingsFs
 ): Finding[] => {
-  const readFile = opts?.readFile ?? defaultReadFile;
+  const { readFile } = opts;
   return project.managers.flatMap((manager) =>
     managerFindings(project, manager, policy, readFile)
   );

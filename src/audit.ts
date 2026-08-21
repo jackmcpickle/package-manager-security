@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 
 import { auditAdvisories } from "./advisories";
@@ -88,7 +87,7 @@ export interface AuditPathInput {
     runOsv?: (lockOrRequirements: string) => Promise<Finding[]>;
     cache?: Cache;
     now?: () => number;
-    digest?: (lockfileBytes: string) => string;
+    digest: (lockfileBytes: string) => string;
     currentVersions?: Record<string, string>;
     fixVersions?: Record<string, string>;
   };
@@ -134,9 +133,6 @@ const versionsFromFindings = (
   }
   return versions;
 };
-
-export const defaultDigest = (lockfileBytes: string): string =>
-  createHash("sha256").update(lockfileBytes).digest("hex");
 
 const groupByGitRoot = (items: ApplySettingsItem[]): ApplySettingsItem[][] => {
   const groups = new Map<string, ApplySettingsItem[]>();
@@ -557,7 +553,7 @@ export const auditPath = async (
 ): Promise<AuditResult> => {
   const { deps } = input;
   const now = deps.now ?? Date.now;
-  const digest = deps.digest ?? defaultDigest;
+  const { digest } = deps;
   const cache =
     deps.cache ??
     createFsCache(path.join(".cache", APP_NAME), now, CACHE_TTL_MS);

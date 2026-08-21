@@ -203,6 +203,7 @@ test("auditPath maps apply skipped dirty to exit 2", async () => {
   const result = await auditPath("/p", {
     concurrency: 4,
     deps: {
+      digest: (bytes) => bytes,
       isDir: (p) => p === "/p" || p === "/p/.git",
       readDir: (dir) => {
         if (dir === "/p") {
@@ -242,6 +243,7 @@ test("auditPath apply on a clean tree writes settings and is not the stub exit 2
   const result = await auditPath("/p", {
     concurrency: 4,
     deps: {
+      digest: (bytes) => bytes,
       isDir: (p) => p === "/p" || p === "/p/.git",
       readDir: (dir) => {
         if (dir === "/p") {
@@ -287,6 +289,7 @@ test("two npm/pnpm roots sharing a gitRoot both get written without force", asyn
   const result = await auditPath("/repo", {
     concurrency: 4,
     deps: {
+      digest: (bytes) => bytes,
       isDir: (p) =>
         p === "/repo" ||
         p === "/repo/.git" ||
@@ -907,6 +910,7 @@ test("auditPath without --apply never writes", async () => {
   const result = await auditPath("/p", {
     concurrency: 4,
     deps: {
+      digest: (bytes) => bytes,
       isDir: (p) => p === "/p" || p === "/p/.git",
       readDir: (dir) => {
         if (dir === "/p") {
