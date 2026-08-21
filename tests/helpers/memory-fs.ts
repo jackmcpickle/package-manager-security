@@ -77,6 +77,10 @@ const notStubbed =
     throw new Error(`${name} not stubbed`);
   };
 
+const discardHostOutput = (_text: string): void => {
+  void _text;
+};
+
 export type FakeHostOverrides = Partial<Omit<Host, "files">> & {
   extraDirs?: string[];
   files?: Partial<HostFiles>;
@@ -105,8 +109,8 @@ export const fakeHost = (overrides: FakeHostOverrides = {}): Host => {
     readStdinChunk: () => Promise.resolve(null),
     run: notStubbed("run"),
     runOsv: () => Promise.resolve([]),
-    stderr: () => {},
-    stdout: () => {},
+    stderr: discardHostOutput,
+    stdout: discardHostOutput,
     which: notStubbed("which"),
     ...hostOverrides,
   };

@@ -1,13 +1,12 @@
 import path from "node:path";
 
 import { auditAdvisories } from "./advisories";
-import { APP_NAME, CONFIG_FILE_NAME } from "./app-name";
+import { CONFIG_FILE_NAME } from "./app-name";
 import { applyAdvisories } from "./apply-advisories";
 import type { ApplyChoice, ApplyPrompt } from "./apply-advisories";
 import { applySettings, applySettingsGroup } from "./apply-settings";
 import type { ApplySettingsItem } from "./apply-settings";
 import type { Cache } from "./cache";
-import { CACHE_TTL_MS, createFsCache } from "./cache";
 import { discoverProjects } from "./discover";
 import { gitRootOf, isAdvisoryKind, severityAtLeast } from "./domain";
 import type {
@@ -62,7 +61,6 @@ export type AuditMode =
   | {
       kind: "interactive";
       prompt: ApplyPrompt;
-      allowMajors: boolean;
       write: WriteDeps;
     };
 
@@ -79,7 +77,7 @@ export interface AuditPathInput {
     which: (binary: string) => string | null;
     run: AuditRun;
     runOsv?: (lockOrRequirements: string) => Promise<Finding[]>;
-    cache?: Cache;
+    cache: Cache;
     now?: () => number;
     digest: (lockfileBytes: string) => string;
     currentVersions?: Record<string, string>;
@@ -522,10 +520,7 @@ export const auditPath = async (
 ): Promise<AuditResult> => {
   const { deps } = input;
   const now = deps.now ?? Date.now;
-  const { digest } = deps;
-  const cache =
-    deps.cache ??
-    createFsCache(path.join(".cache", APP_NAME), now, CACHE_TTL_MS);
+  const { cache, digest } = deps;
   const discovered = discoverProjects(root, {
     isDir: deps.isDir,
     readDir: deps.readDir,

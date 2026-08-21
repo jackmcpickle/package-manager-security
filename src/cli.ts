@@ -292,7 +292,6 @@ const modeFromFlags = (
 ): AuditMode => {
   if (flags.interactive && prompt !== undefined) {
     return {
-      allowMajors: flags.allowMajors,
       kind: "interactive",
       prompt,
       write,

@@ -313,19 +313,13 @@ const dropBlanketEntries = (value: unknown): string[] => {
 
 const dropBlanketObject = (
   value: Record<string, unknown>
-): Record<string, string | number | boolean> => {
-  const kept: Record<string, string | number | boolean> = {};
+): Record<string, unknown> => {
+  const kept: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
     if (isStar(key)) {
       continue;
     }
-    if (
-      typeof child === "string" ||
-      typeof child === "number" ||
-      typeof child === "boolean"
-    ) {
-      kept[key] = child;
-    }
+    kept[key] = child;
   }
   return kept;
 };

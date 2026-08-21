@@ -580,7 +580,6 @@ test("interactive both applies advisories after the settings write dirties the t
     },
     layers: {},
     mode: {
-      allowMajors: false,
       kind: "interactive",
       prompt: () => "both" as const,
       write: {
@@ -644,7 +643,6 @@ test("interactive advisories choice allows a major upgrade", async () => {
     },
     layers: {},
     mode: {
-      allowMajors: false,
       kind: "interactive",
       prompt: () => "advisories" as const,
       write: {

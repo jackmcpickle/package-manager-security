@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import { applySettings } from "../src/apply-settings";
 import { auditPath } from "../src/audit";
 import type { Finding, Project, SettingsFix } from "../src/domain";
+import { createMemoryCache } from "../src/memory-cache";
 import { loadPolicy } from "../src/policy";
 import { auditSettings } from "../src/settings";
 
@@ -203,6 +204,7 @@ test("auditPath maps apply skipped dirty to exit 2", async () => {
   const result = await auditPath("/p", {
     concurrency: 4,
     deps: {
+      cache: createMemoryCache(),
       digest: (bytes) => bytes,
       isDir: (p) => p === "/p" || p === "/p/.git",
       readDir: (dir) => {
@@ -243,6 +245,7 @@ test("auditPath apply on a clean tree writes settings and is not the stub exit 2
   const result = await auditPath("/p", {
     concurrency: 4,
     deps: {
+      cache: createMemoryCache(),
       digest: (bytes) => bytes,
       isDir: (p) => p === "/p" || p === "/p/.git",
       readDir: (dir) => {
@@ -289,6 +292,7 @@ test("two npm/pnpm roots sharing a gitRoot both get written without force", asyn
   const result = await auditPath("/repo", {
     concurrency: 4,
     deps: {
+      cache: createMemoryCache(),
       digest: (bytes) => bytes,
       isDir: (p) =>
         p === "/repo" ||
@@ -910,6 +914,7 @@ test("auditPath without --apply never writes", async () => {
   const result = await auditPath("/p", {
     concurrency: 4,
     deps: {
+      cache: createMemoryCache(),
       digest: (bytes) => bytes,
       isDir: (p) => p === "/p" || p === "/p/.git",
       readDir: (dir) => {

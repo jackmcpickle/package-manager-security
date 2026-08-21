@@ -577,6 +577,23 @@ test("a wildcard exclude-newer-package voids the uv gate", () => {
   expect(codes("uv", files)).toContain("min-age.exclude-all");
 });
 
+test("exclude-newer-package fix drops only blanket keys and keeps any value type", () => {
+  const files = uvFiles(
+    `exclude-newer = "1 days"\n\n[tool.uv.exclude-newer-package]\n"*" = false\nleft-pad = true\nrequests = { exclude-newer = "2 days" }\n`
+  );
+  const found = find("uv", files, "min-age.exclude-all");
+  expect(found?.fix?.edits).toEqual([
+    {
+      key: "tool.uv.exclude-newer-package",
+      op: "set",
+      value: {
+        "left-pad": true,
+        requests: { "exclude-newer": "2 days" },
+      },
+    },
+  ]);
+});
+
 test("uv with audit malware-check true passes", () => {
   const files = uvFiles(
     `exclude-newer = "1 days"\n\n[tool.uv.audit]\nmalware-check = true\n`
