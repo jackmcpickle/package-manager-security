@@ -5,15 +5,16 @@ import type { ApplyPrompt } from "./apply-advisories";
 import { auditPath } from "./audit";
 import type { AuditMode, AuditResult, WriteDeps } from "./audit";
 import type { ExitCode, PresetName } from "./domain";
+import {
+  commandByName,
+  formatCommandHelp,
+  formatRootHelp,
+  formatUnknownCommand,
+  isHelpFlag,
+} from "./help";
 import type { Host } from "./host";
 import type { PolicyLayers } from "./policy";
-import {
-  formatApplySkipped,
-  formatHuman,
-  formatJson,
-  formatMarkdown,
-  formatSarif,
-} from "./report";
+import { formatHuman, formatJson, formatMarkdown, formatSarif } from "./report";
 
 interface AuditFlags {
   path?: string;
@@ -49,6 +50,7 @@ const BOOLEAN_FLAGS: Readonly<Record<string, BooleanFlagKey>> = {
   "--apply": "apply",
   "--apply-advisories": "applyAdvisories",
   "--commit": "commit",
+  "--fix": "apply",
   "--force": "force",
   "--interactive": "interactive",
   "--json": "json",
@@ -336,19 +338,111 @@ const emitOutput = (
   host.stdout(formatHuman(result, { color }));
 };
 
+const topicFromHelpArgs = (rest: string[]): string | undefined =>
+  rest.find((arg) => !isHelpFlag(arg));
+
+const writeHelp = (
+  text: string,
+  write: (s: string) => void
+): { exitCode: 0 } => {
+  write(text);
+  return { exitCode: 0 };
+};
+
+const writeUsageError = (
+  text: string,
+  write: (s: string) => void
+): { exitCode: 2 } => {
+  write(text);
+  return { exitCode: 2 };
+};
+
+const helpForCommand = (
+  name: string,
+  color: boolean,
+  stdout: (s: string) => void,
+  stderr: (s: string) => void
+): { exitCode: ExitCode } => {
+  const command = commandByName(name);
+  if (command === undefined) {
+    return writeUsageError(formatUnknownCommand(name, color), stderr);
+  }
+  return writeHelp(formatCommandHelp(command, color), stdout);
+};
+
+const dispatchExplicitHelp = (
+  head: string,
+  rest: string[],
+  color: boolean,
+  stdout: (s: string) => void,
+  stderr: (s: string) => void
+): { exitCode: ExitCode } => {
+  const topic = topicFromHelpArgs(rest);
+  if (topic !== undefined) {
+    return helpForCommand(topic, color, stdout, stderr);
+  }
+  if (head === "help" && rest.some(isHelpFlag)) {
+    return helpForCommand("help", color, stdout, stderr);
+  }
+  return writeHelp(formatRootHelp(color), stdout);
+};
+
+const dispatchTrailingHelp = (
+  head: string,
+  rest: string[],
+  color: boolean,
+  stdout: (s: string) => void
+): { exitCode: ExitCode } | null => {
+  if (!rest.some(isHelpFlag)) {
+    return null;
+  }
+  const command = commandByName(head);
+  if (command === undefined) {
+    return null;
+  }
+  return writeHelp(formatCommandHelp(command, color), stdout);
+};
+
+const dispatchHelp = (
+  head: string,
+  rest: string[],
+  color: boolean,
+  stdout: (s: string) => void,
+  stderr: (s: string) => void
+): { exitCode: ExitCode } | null => {
+  if (head === "help" || isHelpFlag(head)) {
+    return dispatchExplicitHelp(head, rest, color, stdout, stderr);
+  }
+  return dispatchTrailingHelp(head, rest, color, stdout);
+};
+
 export const run = async (
   argv: string[],
   host: Host
 ): Promise<{ exitCode: ExitCode }> => {
   const cwd = host.cwd();
   const { env } = host;
+  const color = resolveColor(host);
 
-  if (argv[0] !== "audit") {
-    host.stderr(`Usage: ${APP_NAME} <command>\n`);
-    return { exitCode: 2 };
+  if (argv.length === 0) {
+    return writeUsageError(formatRootHelp(color), host.stderr);
   }
 
-  const flags = parseAuditArgs(argv.slice(1));
+  const [head, ...rest] = argv;
+  if (head === undefined) {
+    return writeUsageError(formatRootHelp(color), host.stderr);
+  }
+
+  const helpResult = dispatchHelp(head, rest, color, host.stdout, host.stderr);
+  if (helpResult !== null) {
+    return helpResult;
+  }
+
+  if (head !== "audit") {
+    return writeUsageError(formatUnknownCommand(head, color), host.stderr);
+  }
+
+  const flags = parseAuditArgs(rest);
   const root = resolveRoot(flags.path, cwd);
 
   const layers: PolicyLayers = {
@@ -377,12 +471,6 @@ export const run = async (
     noCache: flags.noCache,
     refresh: flags.refresh,
   });
-
-  const color = resolveColor(host);
-
-  if (result.skippedDirty.length > 0) {
-    host.stderr(formatApplySkipped(result.skippedDirty, { color }));
-  }
 
   emitOutput(flags, result, host, cwd, color);
   return { exitCode: result.exitCode };

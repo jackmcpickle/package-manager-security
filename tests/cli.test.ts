@@ -496,7 +496,7 @@ test("stdin line reader keeps leftover lines after the first newline", async () 
   expect(chunks).toEqual([]);
 });
 
-test("--apply on a dirty tree warns on stderr and exits 2", async () => {
+test("--apply on a dirty tree warns after the folder and shows the planned table", async () => {
   const root = nodePath.join(
     import.meta.dir,
     "fixtures/discover/many-repos/alpha"
@@ -515,11 +515,45 @@ test("--apply on a dirty tree warns on stderr and exits 2", async () => {
     })
   );
   expect(result.exitCode).toBe(2);
-  const err = stderr.join("");
-  expect(err).toContain("apply skipped");
-  expect(err).toContain("dirty");
-  expect(err).toContain("--force");
-  expect(err).toContain(root);
+  expect(stderr.join("")).not.toContain("apply skipped");
+  const out = stdout.join("");
+  const folderAt = out.indexOf(root);
+  const tableAt = out.indexOf("Change to");
+  const skippedAt = out.indexOf("skipped (dirty git tree)");
+  const warnAt = out.indexOf("apply skipped");
+  expect(out).toContain("ignore-scripts");
+  expect(out).toContain("Setting");
+  expect(out).toContain("Current");
+  expect(out).toContain("Status");
+  expect(folderAt).toBeGreaterThan(-1);
+  expect(tableAt).toBeGreaterThan(folderAt);
+  expect(skippedAt).toBeGreaterThan(tableAt);
+  expect(warnAt).toBeGreaterThan(skippedAt);
+  expect(out).toContain("--force");
+});
+
+test("--fix on a dirty tree matches --apply and does not write", async () => {
+  const root = nodePath.join(
+    import.meta.dir,
+    "fixtures/discover/many-repos/alpha"
+  );
+  const stdout: string[] = [];
+  const result = await run(
+    ["audit", root, "--fix"],
+    capturingHost(stdout, [], {
+      files: {
+        writeFile: () => {
+          throw new Error("must not write on a dirty tree");
+        },
+      },
+      gitStatus: () => "dirty",
+    })
+  );
+  const out = stdout.join("");
+  expect(result.exitCode).toBe(2);
+  expect(out).toContain("Change to");
+  expect(out).toContain("skipped (dirty git tree)");
+  expect(out).toContain("apply skipped");
 });
 
 const INFO_ONLY_NPM: Record<string, string> = {
@@ -888,6 +922,41 @@ test("--concurrency 1 runs advisory audits serially; default and invalid values 
   expect(await maxFor([])).toBeGreaterThan(1);
   expect(await maxFor(["--concurrency", "0"])).toBeGreaterThan(1);
   expect(await maxFor(["--concurrency", "nope"])).toBeGreaterThan(1);
+});
+
+test("--apply on a clean tree shows applied rows after the folder", async () => {
+  mkdirSync(
+    nodePath.join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"),
+    {
+      recursive: true,
+    }
+  );
+  const root = nodePath.join(
+    import.meta.dir,
+    "fixtures/discover/many-repos/alpha"
+  );
+  const stdout: string[] = [];
+  const result = await run(
+    ["audit", root, "--apply"],
+    capturingHost(stdout, [], {
+      files: {
+        writeFile: () => {},
+      },
+      gitStatus: () => "clean",
+    })
+  );
+  const out = stdout.join("");
+  const folderAt = out.indexOf(root);
+  const tableAt = out.indexOf("Change to");
+  const appliedAt = out.indexOf("applied");
+  expect(result.exitCode).not.toBe(2);
+  expect(out).toContain("ignore-scripts");
+  expect(out).toContain("true");
+  expect(folderAt).toBeGreaterThan(-1);
+  expect(tableAt).toBeGreaterThan(folderAt);
+  expect(appliedAt).toBeGreaterThan(tableAt);
+  expect(out).not.toContain("apply skipped");
+  expect(out).not.toContain("skipped (dirty git tree)");
 });
 
 test("--apply --force --commit through run() writes on a dirty tree and commits", async () => {

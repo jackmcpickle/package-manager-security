@@ -14,10 +14,18 @@ import type {
 } from "./domain";
 import { isPlainObject } from "./std";
 
+export interface SettingsChange {
+  projectRoot: string;
+  setting: string;
+  current: string;
+  next: string;
+}
+
 export interface ApplyResult {
   written: string[];
   skipped: "dirty" | "nothing" | null;
   committed: boolean;
+  changes: SettingsChange[];
 }
 
 export interface ApplySettingsDeps {
@@ -353,27 +361,135 @@ const collectFixes = (
   return targets;
 };
 
-const writeSettings = (
-  project: Project,
-  findings: Finding[],
-  deps: ApplySettingsDeps
-): string[] => {
-  const written: string[] = [];
-  for (const [filePath, target] of collectFixes(project, findings)) {
-    const next = EDITORS[target.format](
-      deps.readFile(filePath) ?? "",
-      target.edits
-    );
-    if (next === null) {
+const UNSET = "(unset)";
+const REMOVED = "(removed)";
+
+const parseNpmrc = (raw: string): Record<string, unknown> => {
+  const out: Record<string, unknown> = {};
+  for (const line of raw.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#") || trimmed.startsWith(";")) {
       continue;
     }
-    deps.writeFile(filePath, next);
-    written.push(filePath);
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) {
+      continue;
+    }
+    out[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
   }
-  return written;
+  return out;
+};
+
+const parseStructuredTable = (
+  format: Exclude<ConfigFormat, "npmrc" | "bundle-config">,
+  raw: string
+): Record<string, unknown> => {
+  if (format === "json") {
+    const parsed = parseJsonObject(raw);
+    return parsed.ok ? parsed.value : {};
+  }
+  if (format === "toml") {
+    const parsed = parseTomlObject(raw);
+    return parsed.ok ? parsed.value : {};
+  }
+  const parsed = parseYaml(raw);
+  return parsed.ok ? parsed.value : {};
+};
+
+const parseTable = (
+  format: ConfigFormat,
+  raw: string
+): Record<string, unknown> => {
+  if (format === "npmrc") {
+    return parseNpmrc(raw);
+  }
+  if (format === "bundle-config") {
+    return parseBundleConfig(raw);
+  }
+  return parseStructuredTable(format, raw);
+};
+
+const getPath = (table: Record<string, unknown>, key: string): unknown => {
+  let current: unknown = table;
+  for (const part of key.split(".")) {
+    if (!isPlainObject(current)) {
+      return;
+    }
+    current = current[part];
+  }
+  return current;
+};
+
+const displayValue = (value: unknown): string => {
+  if (value === undefined || value === null) {
+    return UNSET;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "boolean" || typeof value === "number") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+};
+
+const editNext = (edit: ConfigEdit): string =>
+  edit.op === "unset" ? REMOVED : displayValue(edit.value);
+
+const changesForTarget = (
+  project: Project,
+  format: ConfigFormat,
+  raw: string,
+  edits: readonly ConfigEdit[]
+): SettingsChange[] => {
+  const table = parseTable(format, raw);
+  const changes: SettingsChange[] = [];
+  for (const edit of edits) {
+    const current = displayValue(getPath(table, edit.key));
+    const next = editNext(edit);
+    if (current === next) {
+      continue;
+    }
+    changes.push({
+      current,
+      next,
+      projectRoot: project.root,
+      setting: edit.key,
+    });
+  }
+  return changes;
+};
+
+const planSettings = (
+  items: ApplySettingsItem[],
+  deps: ApplySettingsDeps
+): {
+  files: { filePath: string; next: string }[];
+  changes: SettingsChange[];
+} => {
+  const files: { filePath: string; next: string }[] = [];
+  const changes: SettingsChange[] = [];
+  for (const item of items) {
+    for (const [filePath, target] of collectFixes(
+      item.project,
+      item.findings
+    )) {
+      const raw = deps.readFile(filePath) ?? "";
+      const next = EDITORS[target.format](raw, target.edits);
+      if (next === null) {
+        continue;
+      }
+      files.push({ filePath, next });
+      changes.push(
+        ...changesForTarget(item.project, target.format, raw, target.edits)
+      );
+    }
+  }
+  return { changes, files };
 };
 
 const emptyApply = (skipped: "nothing" | "dirty"): ApplyResult => ({
+  changes: [],
   committed: false,
   skipped,
   written: [],
@@ -402,14 +518,21 @@ export const applySettingsGroup = (
     return emptyApply("nothing");
   }
 
+  const planned = planSettings(items, deps);
   const gitRoot = gitRootOf(first.project);
   if (isDirtyRoot(deps, gitRoot)) {
-    return emptyApply("dirty");
+    return {
+      changes: planned.changes,
+      committed: false,
+      skipped: "dirty",
+      written: [],
+    };
   }
 
   const written: string[] = [];
-  for (const item of items) {
-    written.push(...writeSettings(item.project, item.findings, deps));
+  for (const file of planned.files) {
+    deps.writeFile(file.filePath, file.next);
+    written.push(file.filePath);
   }
 
   if (written.length === 0) {
@@ -417,6 +540,7 @@ export const applySettingsGroup = (
   }
 
   return {
+    changes: planned.changes,
     committed: maybeCommit(deps, gitRoot, written),
     skipped: null,
     written,

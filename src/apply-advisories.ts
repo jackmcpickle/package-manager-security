@@ -179,6 +179,7 @@ export const applyAdvisories = async (
   const written = upgraded.filter((name): name is string => name !== null);
 
   return {
+    changes: [],
     committed: false,
     skipped: written.length === 0 ? "nothing" : null,
     written,
