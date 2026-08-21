@@ -1,11 +1,7 @@
 import { defineConfig } from "oxlint";
 import core from "ultracite/oxlint/core";
 
-const ignorePatterns = [
-  ...(core.ignorePatterns ?? []),
-  "oxlint-plugins/**",
-  "tests/fixtures/**",
-];
+const ignorePatterns = [...(core.ignorePatterns ?? []), "tests/fixtures/**"];
 
 export default defineConfig({
   env: {
@@ -14,9 +10,7 @@ export default defineConfig({
   },
   extends: [core],
   ignorePatterns,
-  // Published package ships TypeScript; oxlint's Node loader cannot strip
-  // types under node_modules, so we load the bundled copy instead.
-  jsPlugins: ["./oxlint-plugins/eslint-plugin-crap.mjs"],
+  jsPlugins: ["eslint-plugin-crap"],
   rules: {
     "crap/crap": ["error", { lcovPath: "coverage/lcov.info", maxCrap: 8 }],
   },
