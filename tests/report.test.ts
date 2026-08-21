@@ -190,3 +190,55 @@ test("formatHuman with color wraps output in ANSI escapes; plain has none", () =
   const plain = formatHuman(sampleResult);
   expect(plain).not.toContain("\u001B[");
 });
+
+test("formatHuman shows apply table and dirty skip after the folder", () => {
+  const text = formatHuman({
+    applyChanges: [
+      {
+        current: "(unset)",
+        next: "true",
+        projectRoot: "/p",
+        setting: "ignore-scripts",
+        status: "skipped-dirty",
+      },
+    ],
+    exitCode: 2,
+    projects: sampleResult.projects,
+    skippedDirty: ["/p"],
+  });
+  const folderAt = text.indexOf("\n/p\n");
+  const tableAt = text.indexOf("Change to");
+  const rowAt = text.search(
+    /ignore-scripts\s+\(unset\)\s+true\s+skipped \(dirty git tree\)/u
+  );
+  const warnAt = text.indexOf("apply skipped: dirty git tree at /p");
+  expect(text).toContain("Setting");
+  expect(text).toContain("Current");
+  expect(text).toContain("Status");
+  expect(folderAt).toBeGreaterThan(-1);
+  expect(tableAt).toBeGreaterThan(folderAt);
+  expect(rowAt).toBeGreaterThan(tableAt);
+  expect(warnAt).toBeGreaterThan(rowAt);
+});
+
+test("formatHuman marks applied changes in the table and omits the dirty warning", () => {
+  const text = formatHuman({
+    applyChanges: [
+      {
+        current: "(unset)",
+        next: "true",
+        projectRoot: "/p",
+        setting: "ignore-scripts",
+        status: "applied",
+      },
+    ],
+    exitCode: 1,
+    projects: sampleResult.projects,
+    skippedDirty: [],
+  });
+  expect(text).toContain("ignore-scripts");
+  expect(text).toContain("(unset)");
+  expect(text).toContain("applied");
+  expect(text).not.toContain("apply skipped");
+  expect(text).not.toContain("skipped (dirty git tree)");
+});

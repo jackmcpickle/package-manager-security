@@ -7,13 +7,7 @@ import type { AuditMode, AuditResult, WriteDeps } from "./audit";
 import type { ExitCode, PresetName } from "./domain";
 import type { Host } from "./host";
 import type { PolicyLayers } from "./policy";
-import {
-  formatApplySkipped,
-  formatHuman,
-  formatJson,
-  formatMarkdown,
-  formatSarif,
-} from "./report";
+import { formatHuman, formatJson, formatMarkdown, formatSarif } from "./report";
 
 interface AuditFlags {
   path?: string;
@@ -49,6 +43,7 @@ const BOOLEAN_FLAGS: Readonly<Record<string, BooleanFlagKey>> = {
   "--apply": "apply",
   "--apply-advisories": "applyAdvisories",
   "--commit": "commit",
+  "--fix": "apply",
   "--force": "force",
   "--interactive": "interactive",
   "--json": "json",
@@ -379,11 +374,6 @@ export const run = async (
   });
 
   const color = resolveColor(host);
-
-  if (result.skippedDirty.length > 0) {
-    host.stderr(formatApplySkipped(result.skippedDirty, { color }));
-  }
-
   emitOutput(flags, result, host, cwd, color);
   return { exitCode: result.exitCode };
 };

@@ -61,6 +61,7 @@ chmod +x mailclad
 mailclad audit [path]                 # audit only, never writes (default preset: standard)
 mailclad audit . --preset strict      # relaxed | standard | strict
 mailclad audit . --apply              # write settings fixes (clean git tree required)
+mailclad audit . --fix                # same as --apply
 mailclad audit . --apply-advisories   # upgrade packages with known fixes (no major bumps)
 mailclad audit . -i                   # interactive: consent per repo
 mailclad audit . --json               # machine-readable output

@@ -1,5 +1,5 @@
 import { APP_NAME } from "./app-name";
-import type { AuditResult } from "./audit";
+import type { ApplyChange, AuditResult } from "./audit";
 import { gitRootOf, isAdvisoryKind } from "./domain";
 import type { Finding, Severity } from "./domain";
 
@@ -118,6 +118,63 @@ export const formatSarif = (result: AuditResult): string => {
   })}\n`;
 };
 
+const UNSET = "(unset)";
+
+const applyStatusLabel = (status: ApplyChange["status"]): string =>
+  status === "applied" ? "applied" : "skipped (dirty git tree)";
+
+const padEnd = (text: string, width: number): string =>
+  text.length >= width ? text : `${text}${" ".repeat(width - text.length)}`;
+
+const colWidth = (cells: readonly string[]): number => {
+  let width = 0;
+  for (const cell of cells) {
+    if (cell.length > width) {
+      width = cell.length;
+    }
+  }
+  return width;
+};
+
+const formatApplyTable = (changes: ApplyChange[], color: boolean): string[] => {
+  if (changes.length === 0) {
+    return [];
+  }
+  const headers = ["Setting", "Current", "Change to", "Status"] as const;
+  const rows = changes.map((change) => [
+    change.setting,
+    change.current === "" ? UNSET : change.current,
+    change.next,
+    applyStatusLabel(change.status),
+  ]);
+  const widths = headers.map((header, index) =>
+    colWidth([header, ...rows.map((row) => row[index] ?? "")])
+  );
+  const line = (cells: readonly string[]): string =>
+    `  ${cells.map((cell, index) => padEnd(cell, widths[index] ?? 0)).join("  ")}`;
+  return [
+    "",
+    paint(line(headers), ANSI.bold, color),
+    ...rows.map((row) => line(row)),
+  ];
+};
+
+export const formatApplySkipped = (
+  roots: string[],
+  opts?: { color?: boolean }
+): string => {
+  const color = opts?.color ?? false;
+  return roots
+    .map((root) =>
+      paint(
+        `apply skipped: dirty git tree at ${root} (commit your changes or use --force)\n`,
+        ANSI.yellow,
+        color
+      )
+    )
+    .join("");
+};
+
 export const formatHuman = (
   result: AuditResult,
   opts?: { color?: boolean }
@@ -148,22 +205,13 @@ export const formatHuman = (
         `  ${paint(finding.code, ANSI.cyan, color)}  ${paint(finding.severity, SEVERITY_PAINT[finding.severity], color)}  ${finding.message}`
       );
     }
+    const changes = (result.applyChanges ?? []).filter(
+      (change) => change.projectRoot === project.root
+    );
+    lines.push(...formatApplyTable(changes, color));
+    if (result.skippedDirty.includes(gitRootOf(project))) {
+      lines.push(formatApplySkipped([gitRootOf(project)], { color }).trimEnd());
+    }
   }
   return `${lines.join("\n")}\n`;
-};
-
-export const formatApplySkipped = (
-  roots: string[],
-  opts?: { color?: boolean }
-): string => {
-  const color = opts?.color ?? false;
-  return roots
-    .map((root) =>
-      paint(
-        `apply skipped: dirty git tree at ${root} (commit your changes or use --force)\n`,
-        ANSI.yellow,
-        color
-      )
-    )
-    .join("");
 };

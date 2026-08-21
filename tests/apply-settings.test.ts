@@ -61,6 +61,58 @@ test("apply skips a dirty tree without force", () => {
   expect(result.skipped).toBe("dirty");
 });
 
+test("apply on a dirty tree still reports what ignore-scripts would become", () => {
+  const project = npmProject("/p");
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: () => null,
+  });
+  const result = applySettings(project, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "dirty",
+    readFile: () => null,
+    writeFile: () => {
+      throw new Error("must not write");
+    },
+  });
+  expect(result.skipped).toBe("dirty");
+  expect(result.written).toEqual([]);
+  expect(result.changes).toContainEqual({
+    current: "(unset)",
+    next: "true",
+    projectRoot: "/p",
+    setting: "ignore-scripts",
+  });
+});
+
+test("apply on a clean tree reports ignore-scripts as changing to true", () => {
+  const files: Record<string, string> = {
+    "/p/.npmrc": `registry=https://registry.npmjs.org/\n`,
+    "/p/package-lock.json": `{}`,
+    "/p/package.json": `{"name":"x"}`,
+  };
+  const project = npmProject("/p");
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  const result = applySettings(project, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  expect(result.skipped).toBeNull();
+  expect(result.changes).toContainEqual({
+    current: "(unset)",
+    next: "true",
+    projectRoot: "/p",
+    setting: "ignore-scripts",
+  });
+});
+
 test("apply writes pnpm keys to pnpm-workspace.yaml not .npmrc", () => {
   const files: Record<string, string> = {
     "/p/.npmrc": "registry=https://registry.npmjs.org/\n",

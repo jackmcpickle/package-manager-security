@@ -5,7 +5,7 @@ import { CONFIG_FILE_NAME } from "./app-name";
 import { applyAdvisories } from "./apply-advisories";
 import type { ApplyChoice, ApplyPrompt } from "./apply-advisories";
 import { applySettings, applySettingsGroup } from "./apply-settings";
-import type { ApplySettingsItem } from "./apply-settings";
+import type { ApplyResult, ApplySettingsItem } from "./apply-settings";
 import type { Cache } from "./cache";
 import { discoverProjects } from "./discover";
 import { gitRootOf, isAdvisoryKind, severityAtLeast } from "./domain";
@@ -30,10 +30,21 @@ const GATE_SEVERITY: Record<PresetName, Severity> = {
   strict: "moderate",
 };
 
+export type ApplyChangeStatus = "applied" | "skipped-dirty";
+
+export interface ApplyChange {
+  projectRoot: string;
+  setting: string;
+  current: string;
+  next: string;
+  status: ApplyChangeStatus;
+}
+
 export interface AuditResult {
   exitCode: ExitCode;
   projects: { project: Project; findings: Finding[] }[];
   skippedDirty: string[];
+  applyChanges?: ApplyChange[];
 }
 
 export type AuditRun = (
@@ -161,10 +172,12 @@ const mapPool = async <T, R>(
 interface ApplyPhaseResult {
   appliedRoots: Set<string>;
   skippedDirty: string[];
+  applyChanges: ApplyChange[];
 }
 
 const emptyApplyResult = (): ApplyPhaseResult => ({
   appliedRoots: new Set(),
+  applyChanges: [],
   skippedDirty: [],
 });
 
@@ -176,7 +189,14 @@ const mergeApplyResult = (
     into.appliedRoots.add(root);
   }
   into.skippedDirty.push(...from.skippedDirty);
+  into.applyChanges.push(...from.applyChanges);
   return into;
+};
+
+const changesFromApply = (applied: ApplyResult): ApplyChange[] => {
+  const status: ApplyChangeStatus =
+    applied.skipped === "dirty" ? "skipped-dirty" : "applied";
+  return applied.changes.map((change) => ({ ...change, status }));
 };
 
 const applySettingsForce = (
@@ -202,6 +222,7 @@ const applyProjectSettings = (
   });
   return {
     appliedRoots: applied.written.length > 0 ? new Set([gitRoot]) : new Set(),
+    applyChanges: changesFromApply(applied),
     skippedDirty: applied.skipped === "dirty" ? [gitRoot] : [],
   };
 };
@@ -225,7 +246,11 @@ const applyProjectAdvisories = async (
   const gitRoot = gitRootOf(row.project);
   // A root we just wrote settings into is dirty by our own doing; still apply.
   if (shouldSkipDirty(write, gitRoot, appliedRoots)) {
-    return { appliedRoots: new Set(), skippedDirty: [gitRoot] };
+    return {
+      appliedRoots: new Set(),
+      applyChanges: [],
+      skippedDirty: [gitRoot],
+    };
   }
   await applyAdvisories(row.project, row.findings, {
     allowMajors,
@@ -429,6 +454,7 @@ const applyOneSettingsGroup = (
   const gitRoot = gitRootOf(first.project);
   return {
     appliedRoots: applied.written.length > 0 ? new Set([gitRoot]) : new Set(),
+    applyChanges: changesFromApply(applied),
     skippedDirty: applied.skipped === "dirty" ? [gitRoot] : [],
   };
 };
@@ -464,6 +490,7 @@ const applyAllAdvisories = async (
 
 const finalizeApply = (result: ApplyPhaseResult): ApplyPhaseResult => ({
   appliedRoots: result.appliedRoots,
+  applyChanges: result.applyChanges,
   skippedDirty: [...new Set(result.skippedDirty)],
 });
 
@@ -533,6 +560,7 @@ export const auditPath = async (
   const recorded = recordAudited(audited, shouldApplySettings(input.mode));
   const applied = await applyPhase(audited, recorded.pendingApply, input);
   return {
+    applyChanges: applied.applyChanges,
     exitCode: exitCodeFor(
       recorded.projects,
       recorded.incomplete,
