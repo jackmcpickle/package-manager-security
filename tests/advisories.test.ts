@@ -1,33 +1,11 @@
-import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { expect, test } from "bun:test";
 
 import { auditAdvisories } from "../src/advisories";
-import { createFsCache } from "../src/cache";
 import type { Project } from "../src/domain";
+import { createMemoryCache } from "../src/memory-cache";
 import { loadPolicy } from "../src/policy";
 
-const cacheDir1 = mkdtempSync(path.join(tmpdir(), "mailclad-test-cache-"));
-const cacheDir2 = mkdtempSync(path.join(tmpdir(), "mailclad-test-cache2-"));
-const cacheDir3 = mkdtempSync(path.join(tmpdir(), "mailclad-test-cache3-"));
-const cacheDir4 = mkdtempSync(path.join(tmpdir(), "mailclad-test-cache4-"));
-const cacheDir5 = mkdtempSync(path.join(tmpdir(), "mailclad-test-cache5-"));
-const cacheDir6 = mkdtempSync(path.join(tmpdir(), "mailclad-test-cache6-"));
-const cacheDir7 = mkdtempSync(path.join(tmpdir(), "mailclad-test-cache7-"));
-const cacheDir8 = mkdtempSync(path.join(tmpdir(), "mailclad-test-cache8-"));
 const digest = (bytes: string) => `d:${bytes}`;
-
-afterAll(() => {
-  rmSync(cacheDir1, { force: true, recursive: true });
-  rmSync(cacheDir2, { force: true, recursive: true });
-  rmSync(cacheDir3, { force: true, recursive: true });
-  rmSync(cacheDir4, { force: true, recursive: true });
-  rmSync(cacheDir5, { force: true, recursive: true });
-  rmSync(cacheDir6, { force: true, recursive: true });
-  rmSync(cacheDir7, { force: true, recursive: true });
-  rmSync(cacheDir8, { force: true, recursive: true });
-});
 
 const project: Project = {
   gitRoot: "/p",
@@ -45,7 +23,7 @@ const project: Project = {
 
 test("identical lockfile digest within TTL skips the live runner", async () => {
   const calls: string[][] = [];
-  const cache = createFsCache(cacheDir1, () => 1000, 86_400_000);
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const deps = {
     cache,
     digest: () => "abc",
@@ -66,7 +44,7 @@ test("identical lockfile digest within TTL skips the live runner", async () => {
 
 test("digest cache hit still runs live audit when refresh or noCache is set", async () => {
   const calls: string[][] = [];
-  const cache = createFsCache(cacheDir6, () => 1000, 86_400_000);
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const deps = {
     cache,
     digest: () => "abc",
@@ -99,7 +77,7 @@ test("digest cache hit still runs live audit when refresh or noCache is set", as
 
 test("noCache skips writing the lockfile digest cache", async () => {
   const calls: string[][] = [];
-  const cache = createFsCache(cacheDir7, () => 1000, 86_400_000);
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const deps = {
     cache,
     digest: () => "no-cache-digest",
@@ -120,7 +98,7 @@ test("noCache skips writing the lockfile digest cache", async () => {
 
 test("package@version cache hit still runs live audit", async () => {
   const calls: string[][] = [];
-  const cache = createFsCache(cacheDir2, () => 1000, 86_400_000);
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   cache.putPackage("left-pad", "1.0.0", [
     { id: "GHSA-x", name: "left-pad", severity: "high", version: "1.0.0" },
   ]);
@@ -141,7 +119,7 @@ test("package@version cache hit still runs live audit", async () => {
 
 test("lockless projects do not share a digest cache hit", async () => {
   const calls: string[][] = [];
-  const cache = createFsCache(cacheDir3, () => 1000, 86_400_000);
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const locklessPnpm: Project = {
     gitRoot: "/a",
     managers: [
@@ -195,11 +173,7 @@ test("lockless projects do not share a digest cache hit", async () => {
 });
 
 test("npm audit JSON populates package currentVersion and fixVersion on findings", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir4, "versions"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const npmProject: Project = {
     gitRoot: "/p",
     managers: [
@@ -242,11 +216,7 @@ test("npm audit JSON populates package currentVersion and fixVersion on findings
 });
 
 test("advisory range is not used as the installed currentVersion", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir4, "range"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const npmProject: Project = {
     gitRoot: "/p",
     managers: [
@@ -295,11 +265,7 @@ test("advisory range is not used as the installed currentVersion", async () => {
 });
 
 test("range-like version fields never become currentVersion", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir4, "range-fields"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const npmProject: Project = {
     gitRoot: "/p",
     managers: [
@@ -373,11 +339,7 @@ test("range-like version fields never become currentVersion", async () => {
 });
 
 test("x-range version fields never become currentVersion", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir4, "x-range"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const npmProject: Project = {
     gitRoot: "/p",
     managers: [
@@ -427,7 +389,7 @@ test("x-range version fields never become currentVersion", async () => {
 });
 
 test("uv json with deprecated and quarantine statuses emits those finding kinds", async () => {
-  const cache = createFsCache(cacheDir4, () => 1000, 86_400_000);
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const uvProject: Project = {
     gitRoot: "/uv",
     managers: [
@@ -460,7 +422,7 @@ test("uv json with deprecated and quarantine statuses emits those finding kinds"
 });
 
 test("poetry primary uses runOsv when provided", async () => {
-  const cache = createFsCache(cacheDir5, () => 1000, 86_400_000);
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const poetryProject: Project = {
     gitRoot: "/py",
     managers: [
@@ -501,11 +463,7 @@ test("poetry primary uses runOsv when provided", async () => {
 });
 
 test("pnpm primary runs `pnpm audit --json` and parses a high advisory", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir8, "pnpm"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const calls: string[][] = [];
   const pnpmProject: Project = {
     gitRoot: "/pn",
@@ -556,11 +514,7 @@ test("pnpm primary runs `pnpm audit --json` and parses a high advisory", async (
 });
 
 test("bun primary runs `bun audit --json` and parses a critical advisory", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir8, "bun"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const calls: string[][] = [];
   const bunProject: Project = {
     gitRoot: "/bn",
@@ -617,11 +571,7 @@ test("bun primary runs `bun audit --json` and parses a critical advisory", async
 });
 
 test("yarn berry primary runs `yarn npm audit --json` and parses a high advisory", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir8, "yarn"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const calls: string[][] = [];
   const yarnProject: Project = {
     gitRoot: "/yn",
@@ -672,11 +622,7 @@ test("yarn berry primary runs `yarn npm audit --json` and parses a high advisory
 });
 
 test("yarn berry primary parses multi-line NDJSON stdout (real multi-vulnerability output)", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir8, "yarn-ndjson"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const calls: string[][] = [];
   const yarnProject: Project = {
     gitRoot: "/yn-multi",
@@ -751,11 +697,7 @@ test("yarn berry primary parses multi-line NDJSON stdout (real multi-vulnerabili
 });
 
 test("yarn berry primary with empty stdout on a clean repo yields no findings without throwing", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir8, "yarn-empty"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const calls: string[][] = [];
   const yarnProject: Project = {
     gitRoot: "/yn-clean",
@@ -791,11 +733,7 @@ test("yarn berry primary with empty stdout on a clean repo yields no findings wi
 });
 
 test("advisory runner dying (non 0/1 exit code) throws an incomplete-tagged error", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir8, "incomplete"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const deadProject: Project = {
     gitRoot: "/dead",
     managers: [
@@ -827,11 +765,7 @@ test("advisory runner dying (non 0/1 exit code) throws an incomplete-tagged erro
 });
 
 test("cargo primary runs `cargo audit --json` and parses vulnerabilities.list", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir8, "cargo"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const calls: string[][] = [];
   const cargoProject: Project = {
     gitRoot: "/rs",
@@ -883,11 +817,7 @@ test("cargo primary runs `cargo audit --json` and parses vulnerabilities.list", 
 });
 
 test("bundler primary runs `bundle-audit check --format json` and parses results", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir8, "bundler"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const calls: string[][] = [];
   const bundlerProject: Project = {
     gitRoot: "/rb",
@@ -943,11 +873,7 @@ test("bundler primary runs `bundle-audit check --format json` and parses results
 });
 
 test("bundler patched_versions as a string is parsed for fixVersion", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir8, "bundler-string-patch"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const result = await auditAdvisories(
     {
       gitRoot: "/rb",
@@ -1024,11 +950,7 @@ test("live advisory argv is one native command per manager", async () => {
   await Promise.all(
     cases.map(async (row) => {
       const calls: string[][] = [];
-      const cache = createFsCache(
-        path.join(cacheDir8, `argv-${row.name}`),
-        () => 1000,
-        86_400_000
-      );
+      const cache = createMemoryCache(() => 1000, 86_400_000);
       await auditAdvisories(
         {
           gitRoot: `/${row.name}`,
@@ -1094,11 +1016,7 @@ test("enabledManagers omitting a live manager skips its native audit subprocess"
   await Promise.all(
     cases.map(async (row) => {
       const calls: string[][] = [];
-      const cache = createFsCache(
-        path.join(cacheDir8, `disabled-${row.name}`),
-        () => 1000,
-        86_400_000
-      );
+      const cache = createMemoryCache(() => 1000, 86_400_000);
       const { lockfile, manifest } = paths[row.name];
       const result = await auditAdvisories(
         {
@@ -1136,11 +1054,7 @@ test("enabledManagers omitting a live manager skips its native audit subprocess"
 });
 
 test("npm v7 vulnerabilities map fills package currentVersion and fixVersion", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir8, "npm-v7"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const result = await auditAdvisories(
     {
       gitRoot: "/p",
@@ -1193,11 +1107,7 @@ test("npm v7 vulnerabilities map fills package currentVersion and fixVersion", a
 });
 
 test("cached advisory findings do not leak another repo path", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir8, "path-leak"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const deps = {
     cache,
     digest: () => "shared-digest",
@@ -1261,11 +1171,7 @@ test("cached advisory findings do not leak another repo path", async () => {
 });
 
 test("advisory runner throwing also surfaces an incomplete-tagged error", async () => {
-  const cache = createFsCache(
-    path.join(cacheDir8, "throws"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const throwsProject: Project = {
     gitRoot: "/throws",
     managers: [

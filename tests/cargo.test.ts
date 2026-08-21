@@ -1,22 +1,13 @@
-import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { expect, test } from "bun:test";
 
 import { auditAdvisories } from "../src/advisories";
 import { applySettings } from "../src/apply-settings";
-import { createFsCache } from "../src/cache";
 import { discoverProjects } from "../src/discover";
 import type { Policy, Project } from "../src/domain";
+import { createMemoryCache } from "../src/memory-cache";
 import { loadPolicy } from "../src/policy";
 import { auditSettings } from "../src/settings";
 import { memoryFs } from "./helpers/memory-fs";
-
-const cacheRoot = mkdtempSync(path.join(tmpdir(), "mailclad-test-cargo-"));
-
-afterAll(() => {
-  rmSync(cacheRoot, { force: true, recursive: true });
-});
 
 const cargoProject = (
   configPath: string | null = "/p/.cargo/config.toml"
@@ -282,7 +273,7 @@ const runCargoAudit = (
   code = 1
 ): ReturnType<typeof auditAdvisories> =>
   auditAdvisories(advisoryProject, loadPolicy({}), {
-    cache: createFsCache(path.join(cacheRoot, slot), () => 1000, 86_400_000),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     digest: () => `cargo-${slot}`,
     now: () => 1000,
     readFile: () => "lock",

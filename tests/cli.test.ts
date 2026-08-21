@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -12,16 +12,11 @@ import nodePath from "node:path";
 
 import { applySettings } from "../src/apply-settings";
 import { auditPath } from "../src/audit";
-import { createFsCache } from "../src/cache";
 import { createLineReader, run } from "../src/cli";
 import type { DetectedManager, Finding, Project } from "../src/domain";
+import { createMemoryCache } from "../src/memory-cache";
 import { loadPolicy } from "../src/policy";
 import { memoryFs } from "./helpers/memory-fs";
-
-const cacheDir = mkdtempSync(nodePath.join(tmpdir(), "mailclad-task10-cache-"));
-afterAll(() => {
-  rmSync(cacheDir, { force: true, recursive: true });
-});
 
 const CRITICAL_NPM_AUDIT = JSON.stringify({
   advisories: {
@@ -74,11 +69,7 @@ test("audit of a fixture repo with open npm scripts exits 1 and lists the findin
   const stdout: string[] = [];
   const stderr: string[] = [];
   const result = await run(["audit", root], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "alpha"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     run: emptyAuditRun(),
@@ -95,11 +86,7 @@ test("CLI --preset wins over repo .mailclad.toml preset", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const result = await run(["audit", root, "--preset", "relaxed"], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "flag-wins"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     run: emptyAuditRun(),
@@ -116,11 +103,7 @@ test("--refresh and --no-cache bypass the lockfile digest cache", async () => {
     import.meta.dir,
     "fixtures/discover/many-repos/alpha"
   );
-  const cache = createFsCache(
-    nodePath.join(cacheDir, "cache-flags"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   let auditCalls = 0;
   const depsFor = () => ({
     cache,
@@ -158,7 +141,7 @@ test("auditPath critical npm audit JSON is an advisory and exits 1", async () =>
     concurrency: 4,
     deps: {
       ...fs,
-      cache: createFsCache(cacheDir, () => 1000, 86_400_000),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       digest: () => "npm-critical",
       now: () => 1000,
       run: () => ({ code: 1, stderr: "", stdout: CRITICAL_NPM_AUDIT }),
@@ -181,11 +164,7 @@ test("auditPath missing binary skips advisories and exits 0 when settings are cl
     concurrency: 4,
     deps: {
       ...fs,
-      cache: createFsCache(
-        nodePath.join(cacheDir, "missing"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       digest: () => "npm-missing",
       now: () => 1000,
       run: () => {
@@ -223,11 +202,7 @@ test("auditPath runOsv high advisory exits 1", async () => {
     concurrency: 4,
     deps: {
       ...fs,
-      cache: createFsCache(
-        nodePath.join(cacheDir, "osv"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       digest: () => "poetry-osv",
       now: () => 1000,
       run: emptyAuditRun(),
@@ -260,11 +235,7 @@ test("--json prints the full result object with advisory findings", async () => 
   const stdout: string[] = [];
   const stderr: string[] = [];
   const result = await run(["audit", root, "--json"], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "json"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     run: () => ({ code: 1, stderr: "", stdout: CRITICAL_NPM_AUDIT }),
@@ -298,11 +269,7 @@ test("--json --sarif --report emit the same finalized finding codes", async () =
     "fixtures/discover/many-repos/alpha"
   );
   const home = { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") };
-  const cache = createFsCache(
-    nodePath.join(cacheDir, "reports"),
-    () => 1000,
-    86_400_000
-  );
+  const cache = createMemoryCache(() => 1000, 86_400_000);
   const written: Record<string, string> = {};
   const jsonOut: string[] = [];
   const sarifOut: string[] = [];
@@ -369,11 +336,7 @@ test("interactive fake prompt can choose settings only", async () => {
   const prompts: { settingsCount: number; advisoryCount: number }[] = [];
   const installCalls: string[][] = [];
   const result = await run(["audit", root, "-i"], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "interactive"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     gitStatus: () => "clean",
@@ -418,11 +381,7 @@ test("interactive -i uses default stdin prompt when none is injected", async () 
   const written: Record<string, string> = {};
   const stdout: string[] = [];
   const result = await run(["audit", root, "-i"], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "default-prompt"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     gitStatus: () => "clean",
@@ -450,11 +409,7 @@ test("auditPath advisory runner dying yields exit code 2 (incomplete)", async ()
     concurrency: 4,
     deps: {
       ...fs,
-      cache: createFsCache(
-        nodePath.join(cacheDir, "incomplete"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       digest: () => "npm-incomplete",
       now: () => 1000,
       run: () => ({
@@ -489,11 +444,7 @@ test("auditPath below-gate advisory does not fail the standard preset gate", asy
     concurrency: 4,
     deps: {
       ...fs,
-      cache: createFsCache(
-        nodePath.join(cacheDir, "below-gate"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       digest: () => "npm-below-gate",
       now: () => 1000,
       run: () => ({ code: 1, stderr: "", stdout: LOW_NPM_AUDIT }),
@@ -516,11 +467,7 @@ test("audit of a directory with zero discovered projects exits 2", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const result = await run(["audit", root], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "empty-root"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     run: emptyAuditRun(),
@@ -596,11 +543,7 @@ test("--apply on a dirty tree warns on stderr and exits 2", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const result = await run(["audit", root, "--apply"], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "dirty-warn"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     gitStatus: () => "dirty",
@@ -653,11 +596,7 @@ test("info-only settings findings do not fail the standard gate", async () => {
     concurrency: 4,
     deps: {
       ...fs,
-      cache: createFsCache(
-        nodePath.join(cacheDir, "info-only"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       digest: () => "npm-info-only",
       now: () => 1000,
       run: emptyAuditRun(),
@@ -687,11 +626,7 @@ test("standard lists a moderate advisory but does not fail; strict does", async 
     concurrency: 4,
     deps: {
       ...fs,
-      cache: createFsCache(
-        nodePath.join(cacheDir, "mod-std"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       digest: () => "npm-moderate-std",
       now: () => 1000,
       run: () => ({ code: 1, stderr: "", stdout: moderate }),
@@ -713,11 +648,7 @@ test("standard lists a moderate advisory but does not fail; strict does", async 
     concurrency: 4,
     deps: {
       ...fs,
-      cache: createFsCache(
-        nodePath.join(cacheDir, "mod-strict"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       digest: () => "npm-moderate-strict",
       now: () => 1000,
       run: () => ({ code: 1, stderr: "", stdout: moderate }),
@@ -737,11 +668,7 @@ test("relaxed fails only critical advisories; a high advisory is listed and exit
     concurrency: 4,
     deps: {
       ...fs,
-      cache: createFsCache(
-        nodePath.join(cacheDir, "relaxed-high"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       digest: () => "npm-relaxed-high",
       now: () => 1000,
       run: () => ({ code: 1, stderr: "", stdout: advisoryJson("high") }),
@@ -766,11 +693,7 @@ test("uv deprecation fails even under the relaxed preset", async () => {
     concurrency: 4,
     deps: {
       ...fs,
-      cache: createFsCache(
-        nodePath.join(cacheDir, "uv-depr"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       digest: () => "uv-deprecated",
       now: () => 1000,
       run: () => ({
@@ -805,11 +728,7 @@ test("interactive skip writes nothing", async () => {
     "fixtures/discover/many-repos/alpha"
   );
   const result = await run(["audit", root, "-i"], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "interactive-skip"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     gitStatus: () => "clean",
@@ -838,11 +757,7 @@ test("interactive poetry does not offer migrate-to-uv and still uses OSV", async
   const written: string[] = [];
   let osvLock: string | undefined;
   const result = await run(["audit", root, "-i"], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "no-migrate-i"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     gitStatus: () => "clean",
@@ -884,11 +799,7 @@ test("--apply on a poetry project never runs uv migrate commands", async () => {
   const calls: string[][] = [];
   const written: string[] = [];
   await run(["audit", root, "--apply"], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "no-migrate"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     gitStatus: () => "clean",
@@ -934,11 +845,7 @@ test("XDG_CONFIG_HOME wins over ~/.config/mailclad when CLI loads user config", 
   );
   const stdout: string[] = [];
   const result = await run(["audit", root], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "xdg"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: home, XDG_CONFIG_HOME: xdg },
     run: emptyAuditRun(),
@@ -965,11 +872,7 @@ test("omitting --report does not write a markdown file", async () => {
   );
   const written: string[] = [];
   await run(["audit", root], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "no-report"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     run: emptyAuditRun(),
@@ -997,11 +900,7 @@ test("--report creates missing parent directories and writes markdown", async ()
   const outDir = mkdtempSync(nodePath.join(tmpdir(), "mailclad-report-"));
   const reportPath = nodePath.join(outDir, "nested", "deep", "report.md");
   const result = await run(["audit", root, "--report", reportPath], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "report-mkdir"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     run: emptyAuditRun(),
@@ -1034,11 +933,7 @@ test("--concurrency 1 runs advisory audits serially; default and invalid values 
     let inFlight = 0;
     let max = 0;
     await run(["audit", root, ...extra], {
-      cache: createFsCache(
-        nodePath.join(cacheDir, `conc-${extra.join("-") || "default"}`),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       cwd: import.meta.dir,
       env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
       run: async () => {
@@ -1075,11 +970,7 @@ test("--apply --force --commit through run() writes on a dirty tree and commits"
   const written: Record<string, string> = {};
   const commits: { root: string; files: string[] }[] = [];
   const result = await run(["audit", root, "--apply", "--force", "--commit"], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "force-commit"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     gitCommit: (gitRoot, _message, files) => {
@@ -1117,11 +1008,7 @@ test("two primaries with one missing binary still audit the other", async () => 
     concurrency: 4,
     deps: {
       ...fs,
-      cache: createFsCache(
-        nodePath.join(cacheDir, "two-primary"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       digest: () => "two-primary",
       now: () => 1000,
       run: (argv) => {
@@ -1156,11 +1043,7 @@ test("stdout uses ANSI colors when color is enabled and none by default", async 
   );
   const colored: string[] = [];
   await run(["audit", root], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "color-on"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     color: true,
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
@@ -1174,11 +1057,7 @@ test("stdout uses ANSI colors when color is enabled and none by default", async 
 
   const plain: string[] = [];
   await run(["audit", root], {
-    cache: createFsCache(
-      nodePath.join(cacheDir, "color-off"),
-      () => 1000,
-      86_400_000
-    ),
+    cache: createMemoryCache(() => 1000, 86_400_000),
     cwd: import.meta.dir,
     env: { HOME: nodePath.join(import.meta.dir, "fixtures/empty-home") },
     run: emptyAuditRun(),

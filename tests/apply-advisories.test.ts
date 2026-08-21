@@ -1,18 +1,10 @@
-import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { expect, test } from "bun:test";
 
 import { applyAdvisories } from "../src/apply-advisories";
 import { auditPath } from "../src/audit";
-import { createFsCache } from "../src/cache";
 import type { Finding, PackageManager, Project } from "../src/domain";
+import { createMemoryCache } from "../src/memory-cache";
 import { loadPolicy } from "../src/policy";
-
-const cacheDir = mkdtempSync(path.join(tmpdir(), "mailclad-apply-adv-"));
-afterAll(() => {
-  rmSync(cacheDir, { force: true, recursive: true });
-});
 
 const project: Project = {
   gitRoot: "/p",
@@ -444,11 +436,7 @@ test("apply-advisories without version maps upgrades from advisory JSON fields",
     concurrency: 1,
     deps: {
       ...memoryTree(files, ["/p/.git"]),
-      cache: createFsCache(
-        path.join(cacheDir, "from-findings"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       now: () => 1000,
       run: (argv) => {
         ran.push(argv);
@@ -521,11 +509,7 @@ test("--apply --apply-advisories still applies advisories after the settings wri
     concurrency: 1,
     deps: {
       ...memoryTree(files, ["/p/.git"]),
-      cache: createFsCache(
-        path.join(cacheDir, "dirty-after-apply"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       gitStatus: () => tree,
       now: () => 1000,
       run: (argv) => {
@@ -572,11 +556,7 @@ test("interactive both applies advisories after the settings write dirties the t
     concurrency: 1,
     deps: {
       ...memoryTree(files, ["/p/.git"]),
-      cache: createFsCache(
-        path.join(cacheDir, "dirty-after-both"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       gitStatus: () => tree,
       now: () => 1000,
       prompt: () => "both" as const,
@@ -621,11 +601,7 @@ test("interactive advisories choice allows a major upgrade", async () => {
     concurrency: 1,
     deps: {
       ...memoryTree(files, ["/p/.git"]),
-      cache: createFsCache(
-        path.join(cacheDir, "interactive-major"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       gitStatus: () => "clean" as const,
       now: () => 1000,
       prompt: () => "advisories" as const,
@@ -687,7 +663,7 @@ test("audit concurrency pools advisory runs and keeps apply serial", async () =>
     concurrency: 2,
     deps: {
       ...memoryTree(files, ["/repo/.git"]),
-      cache: createFsCache(cacheDir, () => 1000, 86_400_000),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       currentVersions: { "left-pad": "1.0.0" },
       fixVersions: { "left-pad": "1.3.0" },
       now: () => 1000,
