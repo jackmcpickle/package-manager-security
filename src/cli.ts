@@ -5,6 +5,13 @@ import type { ApplyPrompt } from "./apply-advisories";
 import { auditPath } from "./audit";
 import type { AuditMode, AuditResult, WriteDeps } from "./audit";
 import type { ExitCode, PresetName } from "./domain";
+import {
+  commandByName,
+  formatCommandHelp,
+  formatRootHelp,
+  formatUnknownCommand,
+  isHelpFlag,
+} from "./help";
 import type { Host } from "./host";
 import type { PolicyLayers } from "./policy";
 import { formatHuman, formatJson, formatMarkdown, formatSarif } from "./report";
@@ -331,19 +338,91 @@ const emitOutput = (
   host.stdout(formatHuman(result, { color }));
 };
 
+const topicFromHelpArgs = (rest: string[]): string | undefined =>
+  rest.find((arg) => !isHelpFlag(arg));
+
+const writeHelp = (
+  text: string,
+  write: (s: string) => void
+): { exitCode: 0 } => {
+  write(text);
+  return { exitCode: 0 };
+};
+
+const writeUsageError = (
+  text: string,
+  write: (s: string) => void
+): { exitCode: 2 } => {
+  write(text);
+  return { exitCode: 2 };
+};
+
+const helpForCommand = (
+  name: string,
+  color: boolean,
+  stdout: (s: string) => void,
+  stderr: (s: string) => void
+): { exitCode: ExitCode } => {
+  const command = commandByName(name);
+  if (command === undefined) {
+    return writeUsageError(formatUnknownCommand(name, color), stderr);
+  }
+  return writeHelp(formatCommandHelp(command, color), stdout);
+};
+
+const dispatchHelp = (
+  head: string,
+  rest: string[],
+  color: boolean,
+  stdout: (s: string) => void,
+  stderr: (s: string) => void
+): { exitCode: ExitCode } | null => {
+  if (head === "help" || isHelpFlag(head)) {
+    const topic = topicFromHelpArgs(rest);
+    if (topic === undefined) {
+      if (head === "help" && rest.some(isHelpFlag)) {
+        return helpForCommand("help", color, stdout, stderr);
+      }
+      return writeHelp(formatRootHelp(color), stdout);
+    }
+    return helpForCommand(topic, color, stdout, stderr);
+  }
+  if (rest.some(isHelpFlag)) {
+    const command = commandByName(head);
+    if (command !== undefined) {
+      return writeHelp(formatCommandHelp(command, color), stdout);
+    }
+  }
+  return null;
+};
+
 export const run = async (
   argv: string[],
   host: Host
 ): Promise<{ exitCode: ExitCode }> => {
   const cwd = host.cwd();
   const { env } = host;
+  const color = resolveColor(host);
 
-  if (argv[0] !== "audit") {
-    host.stderr(`Usage: ${APP_NAME} <command>\n`);
-    return { exitCode: 2 };
+  if (argv.length === 0) {
+    return writeUsageError(formatRootHelp(color), host.stderr);
   }
 
-  const flags = parseAuditArgs(argv.slice(1));
+  const [head, ...rest] = argv;
+  if (head === undefined) {
+    return writeUsageError(formatRootHelp(color), host.stderr);
+  }
+
+  const helpResult = dispatchHelp(head, rest, color, host.stdout, host.stderr);
+  if (helpResult !== null) {
+    return helpResult;
+  }
+
+  if (head !== "audit") {
+    return writeUsageError(formatUnknownCommand(head, color), host.stderr);
+  }
+
+  const flags = parseAuditArgs(rest);
   const root = resolveRoot(flags.path, cwd);
 
   const layers: PolicyLayers = {
@@ -373,7 +452,6 @@ export const run = async (
     refresh: flags.refresh,
   });
 
-  const color = resolveColor(host);
   emitOutput(flags, result, host, cwd, color);
   return { exitCode: result.exitCode };
 };
