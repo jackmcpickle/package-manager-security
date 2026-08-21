@@ -105,7 +105,11 @@ test("composer allow-plugins true emits scripts.unrestricted under standard", ()
 
 test("composer allow-plugins allowlist or false is quiet", () => {
   expect(
-    codes(composerFiles({ "allow-plugins": { "phpstan/extension-installer": true } }))
+    codes(
+      composerFiles({
+        "allow-plugins": { "phpstan/extension-installer": true },
+      })
+    )
   ).toEqual([]);
   expect(codes(composerFiles({ "allow-plugins": false }))).toEqual([]);
 });
@@ -225,9 +229,9 @@ test("composer source-fallback true is info under standard and high under strict
 });
 
 test("composer without composer.lock emits lockfile.missing", () => {
-  expect(
-    codes({ "/p/composer.json": composerJson() })
-  ).toContain("lockfile.missing");
+  expect(codes({ "/p/composer.json": composerJson() })).toContain(
+    "lockfile.missing"
+  );
 });
 
 test("composer falls back to composer.json when no configPath was detected", () => {
@@ -245,29 +249,29 @@ test("apply writes allow-plugins false into composer.json", () => {
   const { files, result } = apply(composerFiles({ "allow-plugins": true }));
   expect(result.skipped).toBeNull();
   expect(result.written).toContain("/p/composer.json");
-  expect(JSON.parse(files["/p/composer.json"] as string).config["allow-plugins"]).toBe(
-    false
-  );
+  expect(
+    JSON.parse(files["/p/composer.json"] as string).config["allow-plugins"]
+  ).toBe(false);
 });
 
 test("apply restores TLS and drops disable-tls", () => {
   const { files } = apply(
     composerFiles({ "disable-tls": true, "secure-http": false })
   );
-  const config = JSON.parse(files["/p/composer.json"] as string).config as Record<
-    string,
-    unknown
-  >;
+  const config = JSON.parse(files["/p/composer.json"] as string)
+    .config as Record<string, unknown>;
   expect(config["disable-tls"]).toBeUndefined();
   expect(config["secure-http"]).toBe(true);
 });
 
 test("apply restores policy after policy false", () => {
   const { files } = apply(composerFiles({ policy: false }));
-  expect(JSON.parse(files["/p/composer.json"] as string).config.policy).toEqual({
-    advisories: { audit: "fail", block: true },
-    malware: { block: true },
-  });
+  expect(JSON.parse(files["/p/composer.json"] as string).config.policy).toEqual(
+    {
+      advisories: { audit: "fail", block: true },
+      malware: { block: true },
+    }
+  );
 });
 
 test("apply does not rewrite http repositories", () => {
@@ -460,7 +464,13 @@ const runComposerAudit = (
     now: () => 1000,
     readFile: () => "lock",
     run: (argv, cwd) => {
-      expect(argv).toEqual(["composer", "audit", "--format", "json", "--locked"]);
+      expect(argv).toEqual([
+        "composer",
+        "audit",
+        "--format",
+        "json",
+        "--locked",
+      ]);
       expect(cwd).toBe("/php");
       return Promise.resolve({ code, stderr: "", stdout });
     },

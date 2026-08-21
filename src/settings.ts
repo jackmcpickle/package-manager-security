@@ -1901,7 +1901,11 @@ const auditComposer: ManagerAuditor = (project, manager, policy, readFile) => {
     ),
     ...composerScriptsFinding(settings, security.allowPlugins, configPath),
     ...composerTlsFinding(security.disableTls, security.secureHttp, configPath),
-    ...composerHttpRepoFinding(security.httpRepoUrls, policy.preset, configPath),
+    ...composerHttpRepoFinding(
+      security.httpRepoUrls,
+      policy.preset,
+      configPath
+    ),
     ...composerPolicyFindings(security, configPath),
     ...composerSourceFallbackFinding(
       security.sourceFallback,

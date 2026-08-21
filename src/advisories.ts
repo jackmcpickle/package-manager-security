@@ -530,9 +530,31 @@ const walkFindingEntries = (
   }
 };
 
+const walkKnownAdvisoryShape = (
+  item: Record<string, unknown>,
+  kind: FindingKind,
+  push: AdvisoryPush
+): boolean => {
+  if (Array.isArray(item.via)) {
+    walkViaEntries(item, kind, push);
+    return true;
+  }
+  if (Array.isArray(item.vulns)) {
+    walkVulnEntries(item, kind, push);
+    return true;
+  }
+  if (shouldWalkFindings(item, kind)) {
+    walkFindingEntries(item, kind, push);
+    return true;
+  }
+  return false;
+};
+
 const walkItem = (item: unknown, push: AdvisoryPush): void => {
   if (Array.isArray(item)) {
-    walkCollection(item, push);
+    for (const entry of item) {
+      walkItem(entry, push);
+    }
     return;
   }
   if (!isPlainObject(item)) {
@@ -541,20 +563,26 @@ const walkItem = (item: unknown, push: AdvisoryPush): void => {
   if (walkYarnTree(item, push)) {
     return;
   }
-  const kind = kindFromItem(item, "advisory");
-  if (Array.isArray(item.via)) {
-    walkViaEntries(item, kind, push);
+  if (walkKnownAdvisoryShape(item, kindFromItem(item, "advisory"), push)) {
     return;
   }
-  if (Array.isArray(item.vulns)) {
-    walkVulnEntries(item, kind, push);
+  for (const entry of Object.values(item)) {
+    walkItem(entry, push);
+  }
+};
+
+const walkCollection = (value: unknown, push: AdvisoryPush): void => {
+  if (isPlainObject(value)) {
+    for (const item of Object.values(value)) {
+      walkItem(item, push);
+    }
     return;
   }
-  if (shouldWalkFindings(item, kind)) {
-    walkFindingEntries(item, kind, push);
-    return;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      walkItem(item, push);
+    }
   }
-  walkCollection(item, push);
 };
 
 interface PackageBucket {
@@ -595,20 +623,6 @@ const createAdvisoryPush =
     packages.set(key, entry);
   };
 
-const walkCollection = (value: unknown, push: AdvisoryPush): void => {
-  if (isPlainObject(value)) {
-    for (const item of Object.values(value)) {
-      walkItem(item, push);
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      walkItem(item, push);
-    }
-  }
-};
-
 const mappedPackages = (
   findings: Finding[],
   packages: Map<string, PackageBucket>
@@ -617,10 +631,7 @@ const mappedPackages = (
   packages: [...packages.values()],
 });
 
-const walkAbandoned = (
-  abandoned: unknown,
-  push: AdvisoryPush
-): void => {
+const walkAbandoned = (abandoned: unknown, push: AdvisoryPush): void => {
   if (!isPlainObject(abandoned)) {
     return;
   }

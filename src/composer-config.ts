@@ -21,8 +21,13 @@ const asObject = (value: unknown): Record<string, unknown> =>
 const asBoolean = (value: unknown, fallback: boolean): boolean =>
   typeof value === "boolean" ? value : fallback;
 
-const asAuditMode = (value: unknown, fallback: ComposerAuditMode): ComposerAuditMode =>
-  value === "ignore" || value === "report" || value === "fail" ? value : fallback;
+const asAuditMode = (
+  value: unknown,
+  fallback: ComposerAuditMode
+): ComposerAuditMode =>
+  value === "ignore" || value === "report" || value === "fail"
+    ? value
+    : fallback;
 
 export const parseComposerManifest = (
   raw: string
@@ -109,25 +114,42 @@ const malwareBlockFromPolicy = (policy: Record<string, unknown>): boolean => {
   return asBoolean(asObject(policy.malware).block, true);
 };
 
+const advisoriesFromManifest = (
+  policy: Record<string, unknown> | false | null,
+  audit: Record<string, unknown>
+): { block: boolean; mode: ComposerAuditMode } => {
+  if (policy === false) {
+    return { block: false, mode: "ignore" };
+  }
+  if (policy === null) {
+    return advisoriesFromLegacy(audit);
+  }
+  return advisoriesFromPolicy(policy, audit);
+};
+
+const malwareBlockFromManifest = (
+  policy: Record<string, unknown> | false | null
+): boolean => {
+  if (policy === false || policy === null) {
+    return true;
+  }
+  return malwareBlockFromPolicy(policy);
+};
+
 export const readComposerSecurity = (
   manifest: Record<string, unknown>
 ): ComposerSecurity => {
   const config = asObject(manifest.config);
   const policy = policyTable(config);
   const audit = asObject(config.audit);
-  const advisories =
-    policy === false
-      ? { block: false, mode: "ignore" as const }
-      : policy === null
-        ? advisoriesFromLegacy(audit)
-        : advisoriesFromPolicy(policy, audit);
+  const advisories = advisoriesFromManifest(policy, audit);
   return {
     advisoriesAudit: advisories.mode,
     advisoriesBlock: advisories.block,
     allowPlugins: config["allow-plugins"],
     disableTls: asBoolean(config["disable-tls"], false),
     httpRepoUrls: collectHttpRepoUrls(manifest.repositories),
-    malwareBlock: policy === false || policy === null ? true : malwareBlockFromPolicy(policy),
+    malwareBlock: malwareBlockFromManifest(policy),
     policyDisabled: policy === false,
     secureHttp: asBoolean(config["secure-http"], true),
     sourceFallback: asBoolean(config["source-fallback"], false),
@@ -181,33 +203,51 @@ const applyTlsFix = (
   config["secure-http"] = true;
 };
 
+const needsPolicyFix = (codes: ReadonlySet<string>): boolean =>
+  codes.has("audit.disabled") ||
+  codes.has("audit.blocking-disabled") ||
+  codes.has("audit.malware-disabled");
+
+const applyAdvisoriesPolicyFix = (
+  policy: Record<string, unknown>,
+  codes: ReadonlySet<string>
+): void => {
+  const auditDisabled = codes.has("audit.disabled");
+  const blockingDisabled = codes.has("audit.blocking-disabled");
+  if (!auditDisabled && !blockingDisabled) {
+    return;
+  }
+  const advisories = ensureNested(policy, "advisories");
+  if (auditDisabled) {
+    advisories.audit = "fail";
+  }
+  if (blockingDisabled || auditDisabled) {
+    advisories.block = true;
+  }
+};
+
+const applyMalwarePolicyFix = (
+  policy: Record<string, unknown>,
+  codes: ReadonlySet<string>
+): void => {
+  if (codes.has("audit.malware-disabled") || codes.has("audit.disabled")) {
+    ensureNested(policy, "malware").block = true;
+  }
+};
+
 const applyPolicyFixes = (
   config: Record<string, unknown>,
   codes: ReadonlySet<string>
 ): void => {
-  if (
-    !codes.has("audit.disabled") &&
-    !codes.has("audit.blocking-disabled") &&
-    !codes.has("audit.malware-disabled")
-  ) {
+  if (!needsPolicyFix(codes)) {
     return;
   }
   if (config.policy === false) {
     delete config.policy;
   }
   const policy = ensurePolicyObject(config);
-  if (codes.has("audit.disabled") || codes.has("audit.blocking-disabled")) {
-    const advisories = ensureNested(policy, "advisories");
-    if (codes.has("audit.disabled")) {
-      advisories.audit = "fail";
-    }
-    if (codes.has("audit.blocking-disabled") || codes.has("audit.disabled")) {
-      advisories.block = true;
-    }
-  }
-  if (codes.has("audit.malware-disabled") || codes.has("audit.disabled")) {
-    ensureNested(policy, "malware").block = true;
-  }
+  applyAdvisoriesPolicyFix(policy, codes);
+  applyMalwarePolicyFix(policy, codes);
 };
 
 const applySourceFallbackFix = (
