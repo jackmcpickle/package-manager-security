@@ -201,12 +201,8 @@ test("auditPath maps apply skipped dirty to exit 2", async () => {
     "/p/package.json": `{"name":"x"}`,
   };
   const result = await auditPath("/p", {
-    apply: true,
-    applyAdvisories: false,
-    commit: false,
     concurrency: 4,
     deps: {
-      gitStatus: () => "dirty",
       isDir: (p) => p === "/p" || p === "/p/.git",
       readDir: (dir) => {
         if (dir === "/p") {
@@ -217,13 +213,22 @@ test("auditPath maps apply skipped dirty to exit 2", async () => {
       readFile: (p) => files[p] ?? null,
       run: () => ({ code: 0, stderr: "", stdout: `{"advisories":{}}` }),
       which: () => "/usr/bin/npm",
-      writeFile: () => {
-        throw new Error("must not write");
+    },
+    layers: {},
+    mode: {
+      advisories: false,
+      allowMajors: false,
+      kind: "apply",
+      settings: true,
+      write: {
+        commit: false,
+        force: false,
+        gitStatus: () => "dirty",
+        writeFile: () => {
+          throw new Error("must not write");
+        },
       },
     },
-    force: false,
-    interactive: false,
-    layers: {},
   });
   expect(result.exitCode).toBe(2);
 });
@@ -235,12 +240,8 @@ test("auditPath apply on a clean tree writes settings and is not the stub exit 2
     "/p/package.json": `{"name":"x"}`,
   };
   const result = await auditPath("/p", {
-    apply: true,
-    applyAdvisories: false,
-    commit: false,
     concurrency: 4,
     deps: {
-      gitStatus: () => "clean",
       isDir: (p) => p === "/p" || p === "/p/.git",
       readDir: (dir) => {
         if (dir === "/p") {
@@ -251,13 +252,22 @@ test("auditPath apply on a clean tree writes settings and is not the stub exit 2
       readFile: (p) => files[p] ?? null,
       run: () => ({ code: 0, stderr: "", stdout: `{"advisories":{}}` }),
       which: () => "/usr/bin/npm",
-      writeFile: (p, b) => {
-        files[p] = b;
+    },
+    layers: {},
+    mode: {
+      advisories: false,
+      allowMajors: false,
+      kind: "apply",
+      settings: true,
+      write: {
+        commit: false,
+        force: false,
+        gitStatus: () => "clean",
+        writeFile: (p, b) => {
+          files[p] = b;
+        },
       },
     },
-    force: false,
-    interactive: false,
-    layers: {},
   });
   expect(files["/p/.npmrc"]).toContain("ignore-scripts=true");
   expect(result.exitCode).not.toBe(2);
@@ -275,16 +285,8 @@ test("two npm/pnpm roots sharing a gitRoot both get written without force", asyn
   let tree: "clean" | "dirty" = "clean";
   const commits: { root: string; files: string[] }[] = [];
   const result = await auditPath("/repo", {
-    apply: true,
-    applyAdvisories: false,
-    commit: true,
     concurrency: 4,
     deps: {
-      gitCommit: (root, _message, written) => {
-        commits.push({ files: written, root });
-        return true;
-      },
-      gitStatus: () => tree,
       isDir: (p) =>
         p === "/repo" ||
         p === "/repo/.git" ||
@@ -305,14 +307,27 @@ test("two npm/pnpm roots sharing a gitRoot both get written without force", asyn
       readFile: (p) => files[p] ?? null,
       run: () => ({ code: 0, stderr: "", stdout: `{"advisories":{}}` }),
       which: () => "/usr/bin/npm",
-      writeFile: (p, b) => {
-        files[p] = b;
-        tree = "dirty";
+    },
+    layers: {},
+    mode: {
+      advisories: false,
+      allowMajors: false,
+      kind: "apply",
+      settings: true,
+      write: {
+        commit: true,
+        force: false,
+        gitCommit: (root, _message, written) => {
+          commits.push({ files: written, root });
+          return true;
+        },
+        gitStatus: () => tree,
+        writeFile: (p, b) => {
+          files[p] = b;
+          tree = "dirty";
+        },
       },
     },
-    force: false,
-    interactive: false,
-    layers: {},
   });
   expect(files["/repo/a/.npmrc"]).toContain("ignore-scripts=true");
   expect(files["/repo/b/pnpm-workspace.yaml"]).toContain("allowBuilds: {}");
@@ -890,12 +905,8 @@ test("auditPath without --apply never writes", async () => {
     "/p/package.json": `{"name":"x"}`,
   };
   const result = await auditPath("/p", {
-    apply: false,
-    applyAdvisories: false,
-    commit: false,
     concurrency: 4,
     deps: {
-      gitStatus: () => "clean",
       isDir: (p) => p === "/p" || p === "/p/.git",
       readDir: (dir) => {
         if (dir === "/p") {
@@ -906,13 +917,9 @@ test("auditPath without --apply never writes", async () => {
       readFile: (p) => files[p] ?? null,
       run: () => ({ code: 0, stderr: "", stdout: `{"advisories":{}}` }),
       which: () => "/usr/bin/npm",
-      writeFile: () => {
-        throw new Error("audit must not write");
-      },
     },
-    force: false,
-    interactive: false,
     layers: {},
+    mode: { kind: "audit" },
   });
   expect(files["/p/.npmrc"]).toBe(`registry=https://registry.npmjs.org/\n`);
   expect(result.exitCode).toBe(1);

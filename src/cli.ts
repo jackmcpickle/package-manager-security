@@ -10,7 +10,7 @@ import path from "node:path";
 import { APP_NAME, CONFIG_FILE_NAME } from "./app-name";
 import type { ApplyPrompt } from "./apply-advisories";
 import { auditPath, defaultDigest } from "./audit";
-import type { AuditResult, AuditRun } from "./audit";
+import type { AuditMode, AuditResult, AuditRun, WriteDeps } from "./audit";
 import { CACHE_TTL_MS, createFsCache } from "./cache";
 import type { Cache } from "./cache";
 import type { ExitCode, Finding, PresetName } from "./domain";
@@ -428,25 +428,56 @@ const resolveGitDeps = (deps: RunDeps | undefined) => ({
 const buildAuditDeps = (
   deps: RunDeps | undefined,
   cache: Cache,
-  prompt: ApplyPrompt | undefined,
-  write: (filePath: string, body: string) => void,
   now: () => number
 ) => ({
   cache,
   currentVersions: deps?.currentVersions,
   digest: deps?.digest ?? defaultDigest,
   fixVersions: deps?.fixVersions,
-  ...resolveGitDeps(deps),
   isDir,
   now,
-  prompt,
   readDir,
   readFile,
   run: deps?.run ?? defaultRun,
   runOsv: deps?.runOsv ?? defaultRunOsv,
   which: deps?.which ?? defaultWhich,
+});
+
+const buildWriteDeps = (
+  flags: AuditFlags,
+  write: (filePath: string, body: string) => void,
+  deps: RunDeps | undefined
+): WriteDeps => ({
+  commit: flags.commit,
+  force: flags.force,
+  ...resolveGitDeps(deps),
   writeFile: write,
 });
+
+const modeFromFlags = (
+  flags: AuditFlags,
+  write: WriteDeps,
+  prompt: ApplyPrompt | undefined
+): AuditMode => {
+  if (flags.interactive && prompt !== undefined) {
+    return {
+      allowMajors: flags.allowMajors,
+      kind: "interactive",
+      prompt,
+      write,
+    };
+  }
+  if (flags.apply || flags.applyAdvisories) {
+    return {
+      advisories: flags.applyAdvisories,
+      allowMajors: flags.allowMajors,
+      kind: "apply",
+      settings: flags.apply,
+      write,
+    };
+  }
+  return { kind: "audit" };
+};
 
 const resolveColor = (
   deps: RunDeps | undefined,
@@ -506,21 +537,10 @@ export const run = async (
   const write = deps?.writeFile ?? writeFile;
   const prompt = resolvePrompt(deps, flags, stdout);
   const result = await auditPath(root, {
-    allowMajors: flags.allowMajors,
-    apply: flags.apply,
-    applyAdvisories: flags.applyAdvisories,
-    commit: flags.commit,
     concurrency: flags.concurrency,
-    deps: buildAuditDeps(
-      deps,
-      resolveCache(deps, env, now),
-      prompt,
-      write,
-      now
-    ),
-    force: flags.force,
-    interactive: flags.interactive,
+    deps: buildAuditDeps(deps, resolveCache(deps, env, now), now),
     layers,
+    mode: modeFromFlags(flags, buildWriteDeps(flags, write, deps), prompt),
     noCache: flags.noCache,
     refresh: flags.refresh,
   });

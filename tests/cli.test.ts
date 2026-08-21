@@ -136,8 +136,6 @@ test("--refresh and --no-cache bypass the lockfile digest cache", async () => {
 test("auditPath critical npm audit JSON is an advisory and exits 1", async () => {
   const fs = memoryFs(CLEAN_NPM_FILES, ["/p/.git"]);
   const result = await auditPath("/p", {
-    apply: false,
-    applyAdvisories: false,
     concurrency: 4,
     deps: {
       ...fs,
@@ -147,8 +145,8 @@ test("auditPath critical npm audit JSON is an advisory and exits 1", async () =>
       run: () => ({ code: 1, stderr: "", stdout: CRITICAL_NPM_AUDIT }),
       which: () => "/usr/bin/npm",
     },
-    interactive: false,
     layers: {},
+    mode: { kind: "audit" },
   });
   const findings = result.projects.flatMap((row) => row.findings);
   expect(result.exitCode).toBe(1);
@@ -159,8 +157,6 @@ test("auditPath missing binary skips advisories and exits 0 when settings are cl
   const fs = memoryFs(CLEAN_NPM_FILES, ["/p/.git"]);
   let ran = 0;
   const result = await auditPath("/p", {
-    apply: false,
-    applyAdvisories: false,
     concurrency: 4,
     deps: {
       ...fs,
@@ -173,8 +169,8 @@ test("auditPath missing binary skips advisories and exits 0 when settings are cl
       },
       which: () => null,
     },
-    interactive: false,
     layers: {},
+    mode: { kind: "audit" },
   });
   const findings = result.projects.flatMap((row) => row.findings);
   expect(ran).toBe(0);
@@ -197,8 +193,6 @@ test("auditPath runOsv high advisory exits 1", async () => {
     severity: "high",
   };
   const result = await auditPath("/py", {
-    apply: false,
-    applyAdvisories: false,
     concurrency: 4,
     deps: {
       ...fs,
@@ -209,8 +203,8 @@ test("auditPath runOsv high advisory exits 1", async () => {
       runOsv: () => [osvFinding],
       which: () => null,
     },
-    interactive: false,
     layers: {},
+    mode: { kind: "audit" },
   });
   const findings = result.projects.flatMap((row) => row.findings);
   expect(result.exitCode).toBe(1);
@@ -404,8 +398,6 @@ test("interactive -i uses default stdin prompt when none is injected", async () 
 test("auditPath advisory runner dying yields exit code 2 (incomplete)", async () => {
   const fs = memoryFs(CLEAN_NPM_FILES, ["/p/.git"]);
   const result = await auditPath("/p", {
-    apply: false,
-    applyAdvisories: false,
     concurrency: 4,
     deps: {
       ...fs,
@@ -419,8 +411,8 @@ test("auditPath advisory runner dying yields exit code 2 (incomplete)", async ()
       }),
       which: () => "/usr/bin/npm",
     },
-    interactive: false,
     layers: {},
+    mode: { kind: "audit" },
   });
   expect(result.exitCode).toBe(2);
 });
@@ -439,8 +431,6 @@ test("auditPath below-gate advisory does not fail the standard preset gate", asy
     },
   });
   const result = await auditPath("/p", {
-    apply: false,
-    applyAdvisories: false,
     concurrency: 4,
     deps: {
       ...fs,
@@ -450,8 +440,8 @@ test("auditPath below-gate advisory does not fail the standard preset gate", asy
       run: () => ({ code: 1, stderr: "", stdout: LOW_NPM_AUDIT }),
       which: () => "/usr/bin/npm",
     },
-    interactive: false,
     layers: {},
+    mode: { kind: "audit" },
   });
   const findings = result.projects.flatMap((row) => row.findings);
   expect(
@@ -591,8 +581,6 @@ const advisoryJson = (severity: string): string =>
 test("info-only settings findings do not fail the standard gate", async () => {
   const fs = memoryFs(INFO_ONLY_NPM, ["/p/.git"]);
   const result = await auditPath("/p", {
-    apply: false,
-    applyAdvisories: false,
     concurrency: 4,
     deps: {
       ...fs,
@@ -602,8 +590,8 @@ test("info-only settings findings do not fail the standard gate", async () => {
       run: emptyAuditRun(),
       which: () => "/usr/bin/npm",
     },
-    interactive: false,
     layers: {},
+    mode: { kind: "audit" },
   });
   const findings = result.projects.flatMap((row) => row.findings);
   expect(
@@ -621,8 +609,6 @@ test("standard lists a moderate advisory but does not fail; strict does", async 
   const fs = memoryFs(CLEAN_NPM_FILES, ["/p/.git"]);
   const moderate = advisoryJson("moderate");
   const standard = await auditPath("/p", {
-    apply: false,
-    applyAdvisories: false,
     concurrency: 4,
     deps: {
       ...fs,
@@ -632,8 +618,8 @@ test("standard lists a moderate advisory but does not fail; strict does", async 
       run: () => ({ code: 1, stderr: "", stdout: moderate }),
       which: () => "/usr/bin/npm",
     },
-    interactive: false,
     layers: {},
+    mode: { kind: "audit" },
   });
   expect(
     standard.projects
@@ -643,8 +629,6 @@ test("standard lists a moderate advisory but does not fail; strict does", async 
   expect(standard.exitCode).toBe(0);
 
   const strict = await auditPath("/p", {
-    apply: false,
-    applyAdvisories: false,
     concurrency: 4,
     deps: {
       ...fs,
@@ -654,8 +638,8 @@ test("standard lists a moderate advisory but does not fail; strict does", async 
       run: () => ({ code: 1, stderr: "", stdout: moderate }),
       which: () => "/usr/bin/npm",
     },
-    interactive: false,
     layers: { flags: { preset: "strict" } },
+    mode: { kind: "audit" },
   });
   expect(strict.exitCode).toBe(1);
 });
@@ -663,8 +647,6 @@ test("standard lists a moderate advisory but does not fail; strict does", async 
 test("relaxed fails only critical advisories; a high advisory is listed and exits 0", async () => {
   const fs = memoryFs(CLEAN_NPM_FILES, ["/p/.git"]);
   const result = await auditPath("/p", {
-    apply: false,
-    applyAdvisories: false,
     concurrency: 4,
     deps: {
       ...fs,
@@ -674,8 +656,8 @@ test("relaxed fails only critical advisories; a high advisory is listed and exit
       run: () => ({ code: 1, stderr: "", stdout: advisoryJson("high") }),
       which: () => "/usr/bin/npm",
     },
-    interactive: false,
     layers: { flags: { preset: "relaxed" } },
+    mode: { kind: "audit" },
   });
   expect(
     result.projects
@@ -688,8 +670,6 @@ test("relaxed fails only critical advisories; a high advisory is listed and exit
 test("uv deprecation fails even under the relaxed preset", async () => {
   const fs = memoryFs(CLEAN_UV_FILES, ["/uv/.git"]);
   const result = await auditPath("/uv", {
-    apply: false,
-    applyAdvisories: false,
     concurrency: 4,
     deps: {
       ...fs,
@@ -705,8 +685,8 @@ test("uv deprecation fails even under the relaxed preset", async () => {
       }),
       which: (binary) => (binary === "uv" ? "/usr/bin/uv" : null),
     },
-    interactive: false,
     layers: { flags: { preset: "relaxed" } },
+    mode: { kind: "audit" },
   });
   expect(
     result.projects
@@ -1003,8 +983,6 @@ test("two primaries with one missing binary still audit the other", async () => 
   const fs = memoryFs(files, ["/p/.git"]);
   const calls: string[][] = [];
   const result = await auditPath("/p", {
-    apply: false,
-    applyAdvisories: false,
     concurrency: 4,
     deps: {
       ...fs,
@@ -1023,8 +1001,8 @@ test("two primaries with one missing binary still audit the other", async () => 
       },
       which: (binary) => (binary === "uv" ? "/usr/bin/uv" : null),
     },
-    interactive: false,
     layers: {},
+    mode: { kind: "audit" },
   });
   const findings = result.projects.flatMap((row) => row.findings);
   expect(
