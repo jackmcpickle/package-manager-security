@@ -41,15 +41,14 @@
     "check": "ultracite check",
     "check:type-aware": "ultracite check --type-aware",
     "fix": "ultracite fix",
-    "lint": "ultracite check",
-    "lint:bundle-crap": "bun build node_modules/eslint-plugin-crap/src/index.ts --outfile oxlint-plugins/eslint-plugin-crap.mjs --target=node --format=esm"
+    "lint": "ultracite check"
   },
   "dependencies": {
     "smol-toml": "^1.8.0"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",
-    "eslint-plugin-crap": "0.1.1",
+    "eslint-plugin-crap": "0.1.2",
     "oxfmt": "0.63.0",
     "oxlint": "1.78.0",
     "oxlint-tsgolint": "7.0.2001",
