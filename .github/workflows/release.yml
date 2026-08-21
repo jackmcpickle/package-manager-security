@@ -51,15 +51,15 @@ jobs:
       matrix:
         include:
           - target: bun-linux-x64
-            artifact: pmsec-linux-x64
+            artifact: pmguard-linux-x64
           - target: bun-linux-arm64
-            artifact: pmsec-linux-arm64
+            artifact: pmguard-linux-arm64
           - target: bun-darwin-x64
-            artifact: pmsec-darwin-x64
+            artifact: pmguard-darwin-x64
           - target: bun-darwin-arm64
-            artifact: pmsec-darwin-arm64
+            artifact: pmguard-darwin-arm64
           - target: bun-windows-x64
-            artifact: pmsec-windows-x64.exe
+            artifact: pmguard-windows-x64.exe
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2

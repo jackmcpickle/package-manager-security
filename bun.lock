@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "pmsec",
+      "name": "pmguard",
       "dependencies": {
         "smol-toml": "^1.8.0",
       },

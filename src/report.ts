@@ -57,7 +57,7 @@ export const formatJson = (result: AuditResult): string =>
   `${JSON.stringify(result)}\n`;
 
 export const formatMarkdown = (result: AuditResult): string => {
-  const lines = ["# pmsec report", ""];
+  const lines = ["# pmguard report", ""];
   for (const { project, findings } of result.projects) {
     lines.push(`## ${project.root}`);
     if (findings.length === 0) {
@@ -99,7 +99,7 @@ export const formatSarif = (result: AuditResult): string => {
     runs: [
       {
         results,
-        tool: { driver: { name: "pmsec", rules } },
+        tool: { driver: { name: "pmguard", rules } },
       },
     ],
     version: "2.1.0",

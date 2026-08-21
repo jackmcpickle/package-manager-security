@@ -1,19 +1,19 @@
-# pmsec
+# pmguard
 
 Audits package-manager security settings and advisories across monorepos and folders of many projects. It never writes anything unless you pass an apply flag.
 
 Works with npm, pnpm, yarn (Berry), bun, uv, cargo, and bundler. Yarn v1 and non-uv Python projects (Poetry, pip, Pipenv) get flagged but not fixed.
 
-Not the same as the npm package [`pmsec`](https://www.npmjs.com/package/pmsec), which hardens your global tool configs; this CLI audits per-project settings and lockfiles.
+Not the same as the npm package [`pmguard`](https://www.npmjs.com/package/pmguard), which hardens your global tool configs; this CLI audits per-project settings and lockfiles.
 
 ## Install
 
 ### From npm (requires [Bun](https://bun.sh))
 
 ```bash
-bun install -g @jackmcpickle/pmsec
+bun install -g pmguard
 # or
-npm install -g @jackmcpickle/pmsec
+npm install -g pmguard
 ```
 
 The CLI runs on Bun, so Bun must be on your `PATH` either way.
@@ -22,34 +22,34 @@ The CLI runs on Bun, so Bun must be on your `PATH` either way.
 
 Grab the binary for your platform from the [releases page](https://github.com/jackmcpickle/package-manager-security/releases):
 
-- `pmsec-linux-x64` / `pmsec-linux-arm64`
-- `pmsec-darwin-x64` / `pmsec-darwin-arm64` (macOS)
-- `pmsec-windows-x64.exe`
+- `pmguard-linux-x64` / `pmguard-linux-arm64`
+- `pmguard-darwin-x64` / `pmguard-darwin-arm64` (macOS)
+- `pmguard-windows-x64.exe`
 
 Fair warning: they're about 100 MB each, since Bun's runtime is baked in.
 
 ```bash
-curl -fsSL -o pmsec https://github.com/jackmcpickle/package-manager-security/releases/latest/download/pmsec-darwin-arm64
-chmod +x pmsec
-./pmsec audit .
+curl -fsSL -o pmguard https://github.com/jackmcpickle/package-manager-security/releases/latest/download/pmguard-darwin-arm64
+chmod +x pmguard
+./pmguard audit .
 ```
 
 ## Usage
 
 ```bash
-pmsec audit [path]                 # audit only, never writes (default preset: standard)
-pmsec audit . --preset strict      # relaxed | standard | strict
-pmsec audit . --apply              # write settings fixes (clean git tree required)
-pmsec audit . --apply-advisories   # upgrade packages with known fixes (no major bumps)
-pmsec audit . -i                   # interactive: consent per repo
-pmsec audit . --json               # machine-readable output
-pmsec audit . --sarif              # SARIF output
-pmsec audit . --report out.md      # markdown report
+pmguard audit [path]                 # audit only, never writes (default preset: standard)
+pmguard audit . --preset strict      # relaxed | standard | strict
+pmguard audit . --apply              # write settings fixes (clean git tree required)
+pmguard audit . --apply-advisories   # upgrade packages with known fixes (no major bumps)
+pmguard audit . -i                   # interactive: consent per repo
+pmguard audit . --json               # machine-readable output
+pmguard audit . --sarif              # SARIF output
+pmguard audit . --report out.md      # markdown report
 ```
 
 Exit code `0` means every project passed. `1` means a policy failure, either settings drift or an advisory at or above the preset's gate. `2` means the run was incomplete: a missing binary, a dirty tree blocked an apply, an audit subprocess died, or no projects were found.
 
-Configuration lives in `~/.config/pmsec/config.toml`, plus `.pmsec.toml` at the scan root or in any repo. The closer file wins, and flags win over files.
+Configuration lives in `~/.config/pmguard/config.toml`, plus `.pmguard.toml` at the scan root or in any repo. The closer file wins, and flags win over files.
 
 The default **standard** preset requires a **1-day** release-age gate (`minReleaseAgeDays: 1`); **strict** requires 14 days, **relaxed** turns the gate off (0 days).
 
@@ -92,12 +92,12 @@ Manager-specific checks beyond the baseline:
 Checks are version-aware. pnpm 11 turns `minimumReleaseAge` on at 1440 minutes
 and yarn defaults `npmMinimalAgeGate` to `1w` and `enableScripts` to `false`, so
 a missing key on those versions is reported as `info` ("you're relying on a safe
-default") rather than `high`. pmsec reads the version from the `packageManager`
+default") rather than `high`. pmguard reads the version from the `packageManager`
 field in `package.json`; with no pin it assumes a current release.
 
 ## Advisory audits
 
-When settings pass, pmsec also scans lockfiles for known vulnerabilities at or
+When settings pass, pmguard also scans lockfiles for known vulnerabilities at or
 above the preset's advisory gate (`high` for standard, `moderate` for strict,
 `critical` for relaxed). It shells out to each manager's native audit where
 available:
@@ -129,14 +129,14 @@ CI runs on GitHub Actions (`.github/workflows/ci.yml`): tests with coverage, lin
 ### Build
 
 ```bash
-bun run build          # bundle to dist/pmsec.js (the npm bin, runs on Bun)
-bun run build:binary   # compile a standalone binary to dist/pmsec for this machine
+bun run build          # bundle to dist/pmguard.js (the npm bin, runs on Bun)
+bun run build:binary   # compile a standalone binary to dist/pmguard for this machine
 ```
 
 To cross-compile for another platform:
 
 ```bash
-bun build ./src/main.ts --compile --target=bun-linux-x64 --outfile dist/pmsec-linux-x64
+bun build ./src/main.ts --compile --target=bun-linux-x64 --outfile dist/pmguard-linux-x64
 ```
 
 Targets: `bun-linux-x64`, `bun-linux-arm64`, `bun-darwin-x64`, `bun-darwin-arm64`, `bun-windows-x64`.
@@ -146,7 +146,7 @@ Targets: `bun-linux-x64`, `bun-linux-arm64`, `bun-darwin-x64`, `bun-darwin-arm64
 Releases are automated from conventional commits on `main`.
 
 1. **`.github/workflows/publish.yml`** — on push to `main` (when `src/` or `package.json` changes), runs tests, then `commit-and-tag-version` to bump the version, update `CHANGELOG.md`, and push the release commit + tag. Release commits use `[skip ci]` so they don't re-trigger the workflow.
-2. **`.github/workflows/release.yml`** — on tag push (`v*`), creates the GitHub release (notes from `CHANGELOG.md`), attaches standalone binaries for all five platforms, and publishes `@jackmcpickle/pmsec` to npm.
+2. **`.github/workflows/release.yml`** — on tag push (`v*`), creates the GitHub release (notes from `CHANGELOG.md`), attaches standalone binaries for all five platforms, and publishes `pmguard` to npm.
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) so release notes are generated correctly:
 
@@ -169,7 +169,7 @@ git push --follow-tags
 |---|---|---|
 | `DEPLOY_KEY` | publish | SSH deploy key with bypass so the release commit/tag can push to protected `main` |
 
-npm publishing uses [OIDC trusted publishing](https://docs.npmjs.com/trusted-publishers) — no `NPM_TOKEN` secret required. Ensure `jackmcpickle/package-manager-security` → `.github/workflows/release.yml` is configured as a trusted publisher for `@jackmcpickle/pmsec` on npmjs.com.
+npm publishing uses [OIDC trusted publishing](https://docs.npmjs.com/trusted-publishers) — no `NPM_TOKEN` secret required. Ensure `jackmcpickle/package-manager-security` → `.github/workflows/release.yml` is configured as a trusted publisher for `pmguard` on npmjs.com.
 
 ## License
 

@@ -8,14 +8,14 @@ import { createFsCache } from "../src/cache";
 import type { Project } from "../src/domain";
 import { loadPolicy } from "../src/policy";
 
-const cacheDir1 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache-"));
-const cacheDir2 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache2-"));
-const cacheDir3 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache3-"));
-const cacheDir4 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache4-"));
-const cacheDir5 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache5-"));
-const cacheDir6 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache6-"));
-const cacheDir7 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache7-"));
-const cacheDir8 = mkdtempSync(path.join(tmpdir(), "pmsec-test-cache8-"));
+const cacheDir1 = mkdtempSync(path.join(tmpdir(), "pmguard-test-cache-"));
+const cacheDir2 = mkdtempSync(path.join(tmpdir(), "pmguard-test-cache2-"));
+const cacheDir3 = mkdtempSync(path.join(tmpdir(), "pmguard-test-cache3-"));
+const cacheDir4 = mkdtempSync(path.join(tmpdir(), "pmguard-test-cache4-"));
+const cacheDir5 = mkdtempSync(path.join(tmpdir(), "pmguard-test-cache5-"));
+const cacheDir6 = mkdtempSync(path.join(tmpdir(), "pmguard-test-cache6-"));
+const cacheDir7 = mkdtempSync(path.join(tmpdir(), "pmguard-test-cache7-"));
+const cacheDir8 = mkdtempSync(path.join(tmpdir(), "pmguard-test-cache8-"));
 const digest = (bytes: string) => `d:${bytes}`;
 
 afterAll(() => {

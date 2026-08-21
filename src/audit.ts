@@ -359,7 +359,7 @@ const auditOneProject = async (
   digest: (lockfileBytes: string) => string
 ): Promise<AuditedProject> => {
   const repoToml =
-    input.deps.readFile(path.join(project.root, ".pmsec.toml")) ?? undefined;
+    input.deps.readFile(path.join(project.root, ".pmguard.toml")) ?? undefined;
   const projectPolicy = overlayRepoPolicy(input.policy, repoToml, input.flags);
   const flight = preflight(project, { which: input.deps.which });
   const missing = new Set<PackageManager>(
@@ -569,7 +569,7 @@ export const auditPath = async (
   const digest = deps.digest ?? defaultDigest;
   const cache =
     deps.cache ??
-    createFsCache(path.join(".cache", "pmsec"), now, CACHE_TTL_MS);
+    createFsCache(path.join(".cache", "pmguard"), now, CACHE_TTL_MS);
   const discovered = discoverProjects(root, {
     isDir: deps.isDir,
     readDir: deps.readDir,

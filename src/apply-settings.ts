@@ -30,7 +30,7 @@ export interface ApplySettingsItem {
   policy: Policy;
 }
 
-const COMMIT_MESSAGE = "chore: apply pmsec security settings";
+const COMMIT_MESSAGE = "chore: apply pmguard security settings";
 
 interface ResolvedSettings {
   minReleaseAgeDays: number;

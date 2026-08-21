@@ -6,7 +6,7 @@ import path from "node:path";
 import { createFsCache } from "../src/cache";
 import type { AdvisoryResult } from "../src/cache";
 
-const cacheDir = mkdtempSync(path.join(tmpdir(), "pmsec-cache-unit-"));
+const cacheDir = mkdtempSync(path.join(tmpdir(), "pmguard-cache-unit-"));
 
 afterAll(() => {
   rmSync(cacheDir, { force: true, recursive: true });

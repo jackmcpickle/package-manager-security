@@ -136,14 +136,14 @@ const baseDir = (xdg: string | undefined, fallback: string): string =>
 const userConfigPath = (env: Record<string, string | undefined>): string =>
   path.join(
     baseDir(env.XDG_CONFIG_HOME, path.join(env.HOME ?? "", ".config")),
-    "pmsec",
+    "pmguard",
     "config.toml"
   );
 
 const userCachePath = (env: Record<string, string | undefined>): string =>
   path.join(
     baseDir(env.XDG_CACHE_HOME, path.join(env.HOME ?? "", ".cache")),
-    "pmsec"
+    "pmguard"
   );
 
 const isPresetName = (value: string | undefined): value is PresetName =>
@@ -488,7 +488,7 @@ export const run = async (
   const { cwd, env, stderr, stdout } = resolveIo(deps);
 
   if (argv[0] !== "audit") {
-    stderr.write("Usage: pmsec <command>\n");
+    stderr.write("Usage: pmguard <command>\n");
     return { exitCode: 2 };
   }
 
@@ -497,7 +497,7 @@ export const run = async (
 
   const policy = loadPolicy({
     flags: presetFlags(flags.preset),
-    scanToml: readFile(path.join(root, ".pmsec.toml")) ?? undefined,
+    scanToml: readFile(path.join(root, ".pmguard.toml")) ?? undefined,
     userToml: readFile(userConfigPath(env)) ?? undefined,
   });
 
