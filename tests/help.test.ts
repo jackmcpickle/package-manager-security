@@ -60,8 +60,22 @@ const capture = async (argv: string[], extras: FakeHostOverrides = {}) => {
 const expectRootCatalog = (text: string): void => {
   expect(text).toContain("Usage: mailclad");
   expect(text).toContain("audit [path]");
+  expect(text).toContain("init");
   expect(text).toContain("help [command]");
 };
+
+const SEARCH_ORDER =
+  "Looks for a user/tool config, then .mailclad.toml in the scan directory and each project. Closer wins; flags win over files.";
+
+const expectHelpConfig = (text: string): void => {
+  expect(text).toContain("Configuration:");
+  expect(text).toContain(SEARCH_ORDER);
+  expect(text).toContain("/home/.config/mailclad/config.toml");
+  expect(text).toContain("/p/.mailclad.toml");
+  expect(text).toContain("missing");
+};
+
+const helpHome = { HOME: "/home" } as const;
 
 test("mailclad with no args prints the command catalog on stderr and exits 2", async () => {
   const result = await capture([]);
@@ -158,4 +172,51 @@ test("NO_COLOR produces plain help even on a TTY", async () => {
   expect(result.exitCode).toBe(0);
   expect(result.stdout).not.toContain("\u001B[");
   expectRootCatalog(result.stdout);
+});
+
+test("root help lists init and resolved config paths as missing", async () => {
+  const results = await Promise.all(
+    [["help"], ["--help"], ["-h"]].map((argv) =>
+      capture(argv, { env: helpHome })
+    )
+  );
+  for (const result of results) {
+    expect(result.exitCode).toBe(0);
+    expectRootCatalog(result.stdout);
+    expectHelpConfig(result.stdout);
+  }
+});
+
+test("audit help includes search order and resolved user and cwd paths", async () => {
+  const results = await Promise.all(
+    [
+      ["help", "audit"],
+      ["audit", "--help"],
+      ["audit", "-h"],
+    ].map((argv) => capture(argv, { env: helpHome }))
+  );
+  for (const result of results) {
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Usage: mailclad audit");
+    expectHelpConfig(result.stdout);
+  }
+});
+
+test("help init and init --help document --local and --force", async () => {
+  const results = await Promise.all(
+    [
+      ["help", "init"],
+      ["init", "--help"],
+      ["init", "-h"],
+    ].map((argv) => capture(argv))
+  );
+  for (const result of results) {
+    expect(result.exitCode).toBe(0);
+    expect(result.ran).toBe(0);
+    expect(result.stdout).toContain("Usage: mailclad init");
+    expect(result.stdout).toContain("--local");
+    expect(result.stdout).toContain("--force");
+    expect(result.stdout).toContain("-h");
+    expect(result.stdout).toContain("--help");
+  }
 });

@@ -10,6 +10,8 @@ import {
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 
+import { parse } from "smol-toml";
+
 import { applySettings } from "../src/apply-settings";
 import { auditPath } from "../src/audit";
 import { createLineReader, resolveColor, run } from "../src/cli";
@@ -1056,4 +1058,232 @@ test("resolveColor honors the host's isTTY", () => {
   expect(resolveColor(fakeHost({ env: { NO_COLOR: "1" }, isTTY: true }))).toBe(
     false
   );
+});
+
+const SEARCH_ORDER =
+  "Looks for a user/tool config, then .mailclad.toml in the scan directory and each project. Closer wins; flags win over files.";
+
+const expectConfigLine = (
+  text: string,
+  label: string,
+  filePath: string,
+  status: "found" | "missing"
+): void => {
+  const line = text
+    .split("\n")
+    .find((row) => row.includes(label) && row.includes(filePath));
+  expect(line).toBeDefined();
+  expect(line).toContain(status);
+};
+
+test("audit human stdout lists user, scan, and repo config paths as found or missing", async () => {
+  const root = nodePath.join(import.meta.dir, "fixtures/audit/flag-wins");
+  const home = nodePath.join(import.meta.dir, "fixtures/empty-home");
+  const stdout: string[] = [];
+  const result = await run(
+    ["audit", root],
+    capturingHost(stdout, [], { env: { HOME: home } })
+  );
+  const out = stdout.join("");
+  expect(result.exitCode).not.toBe(2);
+  expect(out).toContain("Configuration:");
+  expect(out).toContain(SEARCH_ORDER);
+  expectConfigLine(
+    out,
+    "user",
+    nodePath.join(home, ".config", "mailclad", "config.toml"),
+    "missing"
+  );
+  expectConfigLine(out, "scan", nodePath.join(root, ".mailclad.toml"), "found");
+  expectConfigLine(out, "repo", nodePath.join(root, ".mailclad.toml"), "found");
+});
+
+test("--json keeps JSON on stdout and prints Configuration on stderr", async () => {
+  const root = nodePath.join(import.meta.dir, "fixtures/audit/flag-wins");
+  const home = nodePath.join(import.meta.dir, "fixtures/empty-home");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const result = await run(
+    ["audit", root, "--json"],
+    capturingHost(stdout, stderr, { env: { HOME: home } })
+  );
+  const parsed = JSON.parse(stdout.join("")) as { exitCode: number };
+  expect(typeof parsed.exitCode).toBe("number");
+  expect(result.exitCode).not.toBe(2);
+  expect(stdout.join("")).not.toContain("Configuration:");
+  expect(stderr.join("")).toContain("Configuration:");
+  expectConfigLine(
+    stderr.join(""),
+    "user",
+    nodePath.join(home, ".config", "mailclad", "config.toml"),
+    "missing"
+  );
+  expectConfigLine(
+    stderr.join(""),
+    "scan",
+    nodePath.join(root, ".mailclad.toml"),
+    "found"
+  );
+});
+
+const expectStarterToml = (body: string): void => {
+  const parsed = parse(body) as { preset?: unknown };
+  expect(parsed.preset).toBe("standard");
+  expect(body).toContain("# [pnpm]");
+  expect(body).toContain("# enabledManagers");
+};
+
+test("init writes user config under XDG_CONFIG_HOME", async () => {
+  const home = mkdtempSync(nodePath.join(tmpdir(), "mailclad-init-home-"));
+  const xdg = mkdtempSync(nodePath.join(tmpdir(), "mailclad-init-xdg-"));
+  const stdout: string[] = [];
+  const target = nodePath.join(xdg, "mailclad", "config.toml");
+  const result = await run(
+    ["init"],
+    capturingHost(stdout, [], {
+      cwd: () => home,
+      env: { HOME: home, XDG_CONFIG_HOME: xdg },
+    })
+  );
+  expect(result.exitCode).toBe(0);
+  expect(existsSync(target)).toBe(true);
+  expect(stdout.join("")).toContain(target);
+  expectStarterToml(readFileSync(target, "utf-8"));
+  rmSync(home, { force: true, recursive: true });
+  rmSync(xdg, { force: true, recursive: true });
+});
+
+test("init writes user config under HOME when XDG_CONFIG_HOME is unset", async () => {
+  const home = mkdtempSync(nodePath.join(tmpdir(), "mailclad-init-home-"));
+  const stdout: string[] = [];
+  const target = nodePath.join(home, ".config", "mailclad", "config.toml");
+  const result = await run(
+    ["init"],
+    capturingHost(stdout, [], {
+      cwd: () => home,
+      env: { HOME: home },
+    })
+  );
+  expect(result.exitCode).toBe(0);
+  expect(existsSync(target)).toBe(true);
+  expect(stdout.join("")).toContain(target);
+  expectStarterToml(readFileSync(target, "utf-8"));
+  rmSync(home, { force: true, recursive: true });
+});
+
+test("init --local writes .mailclad.toml in cwd", async () => {
+  const cwd = mkdtempSync(nodePath.join(tmpdir(), "mailclad-init-local-"));
+  const stdout: string[] = [];
+  const target = nodePath.join(cwd, ".mailclad.toml");
+  const result = await run(
+    ["init", "--local"],
+    capturingHost(stdout, [], {
+      cwd: () => cwd,
+      env: emptyHome(),
+    })
+  );
+  expect(result.exitCode).toBe(0);
+  expect(existsSync(target)).toBe(true);
+  expect(stdout.join("")).toContain(target);
+  expectStarterToml(readFileSync(target, "utf-8"));
+  rmSync(cwd, { force: true, recursive: true });
+});
+
+test("init refuses to overwrite an existing file without --force", async () => {
+  const xdg = mkdtempSync(nodePath.join(tmpdir(), "mailclad-init-refuse-"));
+  mkdirSync(nodePath.join(xdg, "mailclad"), { recursive: true });
+  const target = nodePath.join(xdg, "mailclad", "config.toml");
+  writeFileSync(target, `preset = "relaxed"\n`);
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const result = await run(
+    ["init"],
+    capturingHost(stdout, stderr, {
+      cwd: () => xdg,
+      env: { HOME: xdg, XDG_CONFIG_HOME: xdg },
+    })
+  );
+  expect(result.exitCode).toBe(2);
+  expect(stderr.join("")).toContain(target);
+  expect(readFileSync(target, "utf-8")).toBe(`preset = "relaxed"\n`);
+  rmSync(xdg, { force: true, recursive: true });
+});
+
+test("init --force overwrites an existing file", async () => {
+  const xdg = mkdtempSync(nodePath.join(tmpdir(), "mailclad-init-force-"));
+  mkdirSync(nodePath.join(xdg, "mailclad"), { recursive: true });
+  const target = nodePath.join(xdg, "mailclad", "config.toml");
+  writeFileSync(target, `preset = "relaxed"\n`);
+  const stdout: string[] = [];
+  const result = await run(
+    ["init", "--force"],
+    capturingHost(stdout, [], {
+      cwd: () => xdg,
+      env: { HOME: xdg, XDG_CONFIG_HOME: xdg },
+    })
+  );
+  expect(result.exitCode).toBe(0);
+  expect(stdout.join("")).toContain(target);
+  expectStarterToml(readFileSync(target, "utf-8"));
+  rmSync(xdg, { force: true, recursive: true });
+});
+
+test("init refuses an existing unreadable file without --force", async () => {
+  const target = "/xdg/mailclad/config.toml";
+  const stderr: string[] = [];
+  const result = await run(
+    ["init"],
+    capturingHost([], stderr, {
+      cwd: () => "/proj",
+      env: { HOME: "/home", XDG_CONFIG_HOME: "/xdg" },
+      extraDirs: ["/proj"],
+      files: {
+        exists: (filePath) => filePath === target,
+        readFile: () => null,
+        writeFile: () => {
+          throw new Error("must not overwrite an existing unreadable file");
+        },
+      },
+      fsMap: {},
+    })
+  );
+  expect(result.exitCode).toBe(2);
+  expect(stderr.join("")).toContain(target);
+});
+
+test("init rejects an unknown flag and does not write", async () => {
+  const xdg = mkdtempSync(nodePath.join(tmpdir(), "mailclad-init-unknown-"));
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const target = nodePath.join(xdg, "mailclad", "config.toml");
+  const result = await run(
+    ["init", "--focre"],
+    capturingHost(stdout, stderr, {
+      cwd: () => xdg,
+      env: { HOME: xdg, XDG_CONFIG_HOME: xdg },
+    })
+  );
+  expect(result.exitCode).toBe(2);
+  expect(stderr.join("")).toContain("--focre");
+  expect(existsSync(target)).toBe(false);
+  rmSync(xdg, { force: true, recursive: true });
+});
+
+test("init --local --force overwrites cwd .mailclad.toml", async () => {
+  const cwd = mkdtempSync(
+    nodePath.join(tmpdir(), "mailclad-init-local-force-")
+  );
+  const target = nodePath.join(cwd, ".mailclad.toml");
+  writeFileSync(target, `preset = "relaxed"\n`);
+  const stdout: string[] = [];
+  const result = await run(
+    ["init", "--local", "--force"],
+    capturingHost(stdout, [], {
+      cwd: () => cwd,
+      env: emptyHome(),
+    })
+  );
+  expect(result.exitCode).toBe(0);
+  expectStarterToml(readFileSync(target, "utf-8"));
+  rmSync(cwd, { force: true, recursive: true });
 });

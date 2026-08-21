@@ -105,6 +105,22 @@ const COMMANDS: readonly CommandHelp[] = [
     summary: "Audit settings and advisories (never writes unless apply flags)",
   },
   {
+    arguments: [],
+    flags: [
+      {
+        description: "Write .mailclad.toml in the current directory",
+        names: ["--local"],
+      },
+      {
+        description: "Overwrite an existing file",
+        names: ["--force"],
+      },
+      HELP_FLAG,
+    ],
+    name: "init",
+    summary: "Write a starter user config (or --local for this directory)",
+  },
+  {
     arguments: [
       {
         description: "Command to describe",
