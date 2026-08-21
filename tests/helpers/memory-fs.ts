@@ -65,6 +65,8 @@ const memoryHostFiles = (
   const fs = memoryFs(files, extraDirs);
   return {
     ...fs,
+    exists: (filePath: string): boolean =>
+      Object.hasOwn(files, filePath) || dirs.has(filePath),
     writeFile: (filePath: string, content: string): void => {
       files[filePath] = content;
     },

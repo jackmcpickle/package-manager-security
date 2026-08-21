@@ -4,6 +4,7 @@ import type { Cache } from "./cache";
 import type { Finding } from "./domain";
 
 export interface HostFiles {
+  exists: (path: string) => boolean;
   readFile: (path: string) => string | null;
   writeFile: (path: string, content: string) => void;
   readDir: (path: string) => string[];

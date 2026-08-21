@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -41,7 +42,15 @@ const writeFile = (filePath: string, body: string): void => {
   writeFileSync(filePath, body);
 };
 
-export const bunFiles: HostFiles = { isDir, readDir, readFile, writeFile };
+const exists = (filePath: string): boolean => existsSync(filePath);
+
+export const bunFiles: HostFiles = {
+  exists,
+  isDir,
+  readDir,
+  readFile,
+  writeFile,
+};
 
 const runGit = (root: string, args: string[]): boolean => {
   const proc = Bun.spawnSync(["git", "-C", root, ...args], {

@@ -1228,6 +1228,29 @@ test("init --force overwrites an existing file", async () => {
   rmSync(xdg, { force: true, recursive: true });
 });
 
+test("init refuses an existing unreadable file without --force", async () => {
+  const target = "/xdg/mailclad/config.toml";
+  const stderr: string[] = [];
+  const result = await run(
+    ["init"],
+    capturingHost([], stderr, {
+      cwd: () => "/proj",
+      env: { HOME: "/home", XDG_CONFIG_HOME: "/xdg" },
+      extraDirs: ["/proj"],
+      files: {
+        exists: (filePath) => filePath === target,
+        readFile: () => null,
+        writeFile: () => {
+          throw new Error("must not overwrite an existing unreadable file");
+        },
+      },
+      fsMap: {},
+    })
+  );
+  expect(result.exitCode).toBe(2);
+  expect(stderr.join("")).toContain(target);
+});
+
 test("init rejects an unknown flag and does not write", async () => {
   const xdg = mkdtempSync(nodePath.join(tmpdir(), "mailclad-init-unknown-"));
   const stdout: string[] = [];

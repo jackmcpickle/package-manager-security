@@ -453,7 +453,7 @@ const runInit = (args: string[], host: Host): { exitCode: ExitCode } => {
   const target = flags.local
     ? dirConfigPath(host.cwd())
     : userConfigPath(host.env);
-  if (host.files.readFile(target) !== null && !flags.force) {
+  if (host.files.exists(target) && !flags.force) {
     return writeUsageError(
       `Refusing to overwrite existing file ${target} (use --force)\n`,
       host.stderr
