@@ -3,5 +3,6 @@ dist
 coverage
 .superpowers
 .worktrees
+.claude
 .cache
 .handover

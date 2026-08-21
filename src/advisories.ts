@@ -16,6 +16,9 @@ const LIVE_MANAGERS = new Set<PackageManager>([
   "yarn",
   "bun",
   "uv",
+  "cargo",
+  "bundler",
+  "composer",
 ]);
 const OSV_MANAGERS = new Set<PackageManager>(["poetry", "pip", "pipenv"]);
 
@@ -27,27 +30,20 @@ const incompleteError = (): Error & { incomplete: true } =>
     incomplete: true as const,
   });
 
+const AUDIT_COMMANDS: Partial<Record<PackageManager, readonly string[]>> = {
+  bun: ["bun", "audit", "--json"],
+  bundler: ["bundle-audit", "check", "--format", "json"],
+  cargo: ["cargo", "audit", "--json"],
+  composer: ["composer", "audit", "--format", "json", "--locked"],
+  npm: ["npm", "audit", "--json"],
+  pnpm: ["pnpm", "audit", "--json"],
+  uv: ["uv", "audit", "--output-format", "json", "--frozen"],
+  yarn: ["yarn", "npm", "audit", "--json"],
+};
+
 const auditArgv = (name: PackageManager): string[] | null => {
-  switch (name) {
-    case "npm": {
-      return ["npm", "audit", "--json"];
-    }
-    case "pnpm": {
-      return ["pnpm", "audit", "--json"];
-    }
-    case "bun": {
-      return ["bun", "audit", "--json"];
-    }
-    case "yarn": {
-      return ["yarn", "npm", "audit", "--json"];
-    }
-    case "uv": {
-      return ["uv", "audit", "--output-format", "json", "--frozen"];
-    }
-    default: {
-      return null;
-    }
-  }
+  const argv = AUDIT_COMMANDS[name];
+  return argv ? [...argv] : null;
 };
 
 const parseJson = (stdout: string): unknown => {
@@ -97,10 +93,9 @@ const versionFromRange = (range: string): string | undefined => {
   return match?.groups?.version;
 };
 
-const kindFromItem = (
-  item: Record<string, unknown>,
-  fallback: FindingKind
-): FindingKind => {
+const advisoryKindOverride = (
+  item: Record<string, unknown>
+): FindingKind | null => {
   const status = String(item.status ?? "").toLowerCase();
   if (status === "deprecated" || item.deprecated === true) {
     return "deprecated";
@@ -108,8 +103,13 @@ const kindFromItem = (
   if (status === "quarantine" || item.quarantine === true) {
     return "quarantine";
   }
-  return fallback;
+  return null;
 };
+
+const kindFromItem = (
+  item: Record<string, unknown>,
+  fallback: FindingKind
+): FindingKind => advisoryKindOverride(item) ?? fallback;
 
 const packageName = (value: unknown): string | undefined => {
   if (isPlainObject(value) && typeof value.name === "string") {
@@ -145,10 +145,22 @@ const firstArrayVersion = (items: unknown): string | undefined => {
   }
 };
 
+const directVersion = (item: Record<string, unknown>): string | undefined => {
+  for (const field of [
+    item.version,
+    item.installedVersion,
+    packageVersion(item.package),
+    packageVersion(item.gem),
+  ]) {
+    const version = concreteVersion(field);
+    if (version !== undefined) {
+      return version;
+    }
+  }
+};
+
 const firstVersion = (item: Record<string, unknown>): string =>
-  concreteVersion(item.version) ??
-  concreteVersion(item.installedVersion) ??
-  concreteVersion(packageVersion(item.package)) ??
+  directVersion(item) ??
   firstArrayVersion(item.findings) ??
   firstArrayVersion(item.via) ??
   "unknown";
@@ -159,8 +171,11 @@ const ghsaFromUrl = (url: string): string | undefined => {
 };
 
 const rawAdvisoryId = (item: Record<string, unknown>): unknown =>
+  item.advisoryId ??
   item.github_advisory_id ??
   item.id ??
+  item.cve ??
+  item.remoteId ??
   item.source ??
   (typeof item.url === "string" ? ghsaFromUrl(item.url) : undefined);
 
@@ -237,11 +252,30 @@ const fixFromPatchKeys = (
   }
 };
 
+const fixFromPatchedVersions = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    return versionFromRange(value);
+  }
+  if (!Array.isArray(value)) {
+    return;
+  }
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const version = versionFromRange(entry);
+    if (version !== undefined) {
+      return version;
+    }
+  }
+};
+
 const fixFromPatchedOrFixed = (
   item: Record<string, unknown>
 ): string | undefined => {
-  if (typeof item.patched_versions === "string") {
-    return versionFromRange(item.patched_versions);
+  const patched = fixFromPatchedVersions(item.patched_versions);
+  if (patched !== undefined) {
+    return patched;
   }
   if (Array.isArray(item.fixed) && typeof item.fixed[0] === "string") {
     return item.fixed[0];
@@ -430,6 +464,7 @@ const shouldWalkFindings = (
   Array.isArray(item.findings) ||
   item.module_name !== undefined ||
   item.advisory !== undefined ||
+  item.advisoryId !== undefined ||
   kind === "deprecated" ||
   kind === "quarantine";
 
@@ -456,7 +491,12 @@ const versionsForItem = (item: Record<string, unknown>): string[] => {
 
 const itemPackageName = (item: Record<string, unknown>): string =>
   String(
-    item.module_name ?? item.name ?? packageName(item.package) ?? "unknown"
+    item.module_name ??
+      item.packageName ??
+      item.name ??
+      packageName(item.package) ??
+      packageName(item.gem) ??
+      "unknown"
   );
 
 const itemAdvisoryMessage = (
@@ -479,33 +519,69 @@ const walkFindingEntries = (
 ): void => {
   const name = itemPackageName(item);
   const advisory = isPlainObject(item.advisory) ? item.advisory : item;
-  const severity = asSeverity(advisory.severity ?? item.severity);
+  const severity = asSeverity(
+    advisory.severity ?? advisory.criticality ?? item.severity
+  );
   const message = itemAdvisoryMessage(advisory, item, name, severity);
-  const fix = extractFix(item);
+  const fix = extractFix(advisory) ?? extractFix(item);
   const id = advisoryId(advisory);
   for (const version of versionsForItem(item)) {
     push(name, version, severity, id, message, kindFromItem(item, kind), fix);
   }
 };
 
+const walkKnownAdvisoryShape = (
+  item: Record<string, unknown>,
+  kind: FindingKind,
+  push: AdvisoryPush
+): boolean => {
+  if (Array.isArray(item.via)) {
+    walkViaEntries(item, kind, push);
+    return true;
+  }
+  if (Array.isArray(item.vulns)) {
+    walkVulnEntries(item, kind, push);
+    return true;
+  }
+  if (shouldWalkFindings(item, kind)) {
+    walkFindingEntries(item, kind, push);
+    return true;
+  }
+  return false;
+};
+
 const walkItem = (item: unknown, push: AdvisoryPush): void => {
+  if (Array.isArray(item)) {
+    for (const entry of item) {
+      walkItem(entry, push);
+    }
+    return;
+  }
   if (!isPlainObject(item)) {
     return;
   }
   if (walkYarnTree(item, push)) {
     return;
   }
-  const kind = kindFromItem(item, "advisory");
-  if (Array.isArray(item.via)) {
-    walkViaEntries(item, kind, push);
+  if (walkKnownAdvisoryShape(item, kindFromItem(item, "advisory"), push)) {
     return;
   }
-  if (Array.isArray(item.vulns)) {
-    walkVulnEntries(item, kind, push);
+  for (const entry of Object.values(item)) {
+    walkItem(entry, push);
+  }
+};
+
+const walkCollection = (value: unknown, push: AdvisoryPush): void => {
+  if (isPlainObject(value)) {
+    for (const item of Object.values(value)) {
+      walkItem(item, push);
+    }
     return;
   }
-  if (shouldWalkFindings(item, kind)) {
-    walkFindingEntries(item, kind, push);
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      walkItem(item, push);
+    }
   }
 };
 
@@ -547,20 +623,6 @@ const createAdvisoryPush =
     packages.set(key, entry);
   };
 
-const walkCollection = (value: unknown, push: AdvisoryPush): void => {
-  if (isPlainObject(value)) {
-    for (const item of Object.values(value)) {
-      walkItem(item, push);
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      walkItem(item, push);
-    }
-  }
-};
-
 const mappedPackages = (
   findings: Finding[],
   packages: Map<string, PackageBucket>
@@ -568,6 +630,45 @@ const mappedPackages = (
   findings,
   packages: [...packages.values()],
 });
+
+const walkAbandoned = (abandoned: unknown, push: AdvisoryPush): void => {
+  if (!isPlainObject(abandoned)) {
+    return;
+  }
+  for (const name of Object.keys(abandoned)) {
+    if (name === "") {
+      continue;
+    }
+    push(
+      name,
+      "unknown",
+      "info",
+      "advisory.abandoned",
+      `${name} is abandoned`,
+      "deprecated",
+      undefined
+    );
+  }
+};
+
+const walkAuditRoots = (
+  obj: Record<string, unknown>,
+  push: AdvisoryPush
+): void => {
+  walkCollection(obj.advisories, push);
+  if (
+    isPlainObject(obj.vulnerabilities) &&
+    Array.isArray(obj.vulnerabilities.list)
+  ) {
+    walkCollection(obj.vulnerabilities.list, push);
+  } else {
+    walkCollection(obj.vulnerabilities, push);
+  }
+  walkCollection(obj.results, push);
+  walkCollection(obj.dependencies, push);
+  walkCollection(obj.audits, push);
+  walkAbandoned(obj.abandoned, push);
+};
 
 const mapAuditJson = (
   parsed: unknown,
@@ -593,10 +694,7 @@ const mapAuditJson = (
     walkItem(obj, push);
     return mappedPackages(findings, packages);
   }
-  walkCollection(obj.advisories, push);
-  walkCollection(obj.vulnerabilities, push);
-  walkCollection(obj.dependencies, push);
-  walkCollection(obj.audits, push);
+  walkAuditRoots(obj, push);
   return mappedPackages(findings, packages);
 };
 

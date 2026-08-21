@@ -4,6 +4,7 @@ import path from "node:path";
 import { parse } from "smol-toml";
 
 import { auditAdvisories } from "./advisories";
+import { APP_NAME, CONFIG_FILE_NAME } from "./app-name";
 import { applyAdvisories } from "./apply-advisories";
 import type { ApplyChoice, ApplyPrompt } from "./apply-advisories";
 import { applySettings, applySettingsGroup } from "./apply-settings";
@@ -359,7 +360,7 @@ const auditOneProject = async (
   digest: (lockfileBytes: string) => string
 ): Promise<AuditedProject> => {
   const repoToml =
-    input.deps.readFile(path.join(project.root, ".pmsec.toml")) ?? undefined;
+    input.deps.readFile(path.join(project.root, CONFIG_FILE_NAME)) ?? undefined;
   const projectPolicy = overlayRepoPolicy(input.policy, repoToml, input.flags);
   const flight = preflight(project, { which: input.deps.which });
   const missing = new Set<PackageManager>(
@@ -569,7 +570,7 @@ export const auditPath = async (
   const digest = deps.digest ?? defaultDigest;
   const cache =
     deps.cache ??
-    createFsCache(path.join(".cache", "pmsec"), now, CACHE_TTL_MS);
+    createFsCache(path.join(".cache", APP_NAME), now, CACHE_TTL_MS);
   const discovered = discoverProjects(root, {
     isDir: deps.isDir,
     readDir: deps.readDir,

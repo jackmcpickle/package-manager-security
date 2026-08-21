@@ -1,7 +1,11 @@
 import { defineConfig } from "oxlint";
 import core from "ultracite/oxlint/core";
 
-const ignorePatterns = [...(core.ignorePatterns ?? []), "tests/fixtures/**"];
+const ignorePatterns = [
+  ...(core.ignorePatterns ?? []),
+  "**/.claude",
+  "tests/fixtures/**",
+];
 
 export default defineConfig({
   env: {

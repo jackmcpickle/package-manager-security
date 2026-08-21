@@ -6,6 +6,7 @@ export default defineConfig({
   ignorePatterns: [
     ...(ultracite.ignorePatterns ?? []),
     "**/*.md",
+    "**/.claude",
     "oxlint-plugins/**",
     "tests/fixtures/**",
   ],

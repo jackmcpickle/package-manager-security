@@ -5,7 +5,16 @@ import { loadPolicy } from "../src/policy";
 test("defaults to standard preset when no config given", () => {
   const policy = loadPolicy({});
   expect(policy.preset).toBe("standard");
-  expect(policy.enabledManagers).toEqual(["npm", "pnpm", "yarn", "bun", "uv"]);
+  expect(policy.enabledManagers).toEqual([
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun",
+    "uv",
+    "bundler",
+    "cargo",
+    "composer",
+  ]);
 });
 
 test("repo config overrides user preset and flags override repo", () => {
@@ -80,7 +89,26 @@ test("invalid TOML as the only layer leaves standard defaults", () => {
     userToml: `preset = "strict"\n[[[`,
   });
   expect(policy.preset).toBe("standard");
-  expect(policy.enabledManagers).toEqual(["npm", "pnpm", "yarn", "bun", "uv"]);
+  expect(policy.enabledManagers).toEqual([
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun",
+    "uv",
+    "bundler",
+    "cargo",
+    "composer",
+  ]);
+});
+
+test("composer per-manager table is accepted", () => {
+  const policy = loadPolicy({
+    repoToml: `
+[composer]
+ignoreScripts = false
+`,
+  });
+  expect(policy.perManager.composer?.ignoreScripts).toBe(false);
 });
 
 test("rejects poetry pip and pipenv as per-manager tables", () => {

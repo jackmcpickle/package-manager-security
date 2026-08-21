@@ -16,8 +16,9 @@ import { createFsCache } from "../src/cache";
 import { createLineReader, run } from "../src/cli";
 import type { DetectedManager, Finding, Project } from "../src/domain";
 import { loadPolicy } from "../src/policy";
+import { memoryFs } from "./helpers/memory-fs";
 
-const cacheDir = mkdtempSync(nodePath.join(tmpdir(), "pmsec-task10-cache-"));
+const cacheDir = mkdtempSync(nodePath.join(tmpdir(), "mailclad-task10-cache-"));
 afterAll(() => {
   rmSync(cacheDir, { force: true, recursive: true });
 });
@@ -46,60 +47,13 @@ const POETRY_FILES: Record<string, string> = {
   "/py/pyproject.toml": `[tool.poetry]\nname = "x"\nversion = "0.1.0"\n`,
 };
 
-const memoryFs = (
-  files: Record<string, string>,
-  extraDirs: string[] = []
-): {
-  isDir: (filePath: string) => boolean;
-  readDir: (dir: string) => string[];
-  readFile: (filePath: string) => string | null;
-} => {
-  const dirs = new Set<string>(["/", ...extraDirs]);
-  const addDir = (dir: string) => {
-    let current = dir;
-    while (current && current !== "/") {
-      dirs.add(current);
-      current = nodePath.dirname(current);
-    }
-  };
-  for (const file of Object.keys(files)) {
-    addDir(nodePath.dirname(file));
-  }
-  for (const dir of extraDirs) {
-    addDir(dir);
-  }
-
-  return {
-    isDir(filePath: string): boolean {
-      return dirs.has(filePath);
-    },
-    readDir(dir: string): string[] {
-      const prefix = dir.endsWith("/") ? dir : `${dir}/`;
-      const names = new Set<string>();
-      for (const entry of [...dirs, ...Object.keys(files)]) {
-        if (!entry.startsWith(prefix)) {
-          continue;
-        }
-        const [name] = entry.slice(prefix.length).split("/");
-        if (name) {
-          names.add(name);
-        }
-      }
-      return [...names];
-    },
-    readFile(filePath: string): string | null {
-      return files[filePath] ?? null;
-    },
-  };
-};
-
 const emptyAuditRun = () => () => ({
   code: 0,
   stderr: "",
   stdout: `{"advisories":{}}`,
 });
 
-test("pmsec with no args prints usage and exits 2", async () => {
+test("mailclad with no args prints usage and exits 2", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const result = await run([], {
@@ -109,7 +63,7 @@ test("pmsec with no args prints usage and exits 2", async () => {
     stdout: { write: (s: string) => stdout.push(s) },
   });
   expect(result.exitCode).toBe(2);
-  expect(stderr.join("")).toContain("Usage: pmsec");
+  expect(stderr.join("")).toContain("Usage: mailclad");
 });
 
 test("audit of a fixture repo with open npm scripts exits 1 and lists the finding", async () => {
@@ -136,7 +90,7 @@ test("audit of a fixture repo with open npm scripts exits 1 and lists the findin
   expect(stdout.join("")).toContain("scripts.unrestricted");
 });
 
-test("CLI --preset wins over repo .pmsec.toml preset", async () => {
+test("CLI --preset wins over repo .mailclad.toml preset", async () => {
   const root = nodePath.join(import.meta.dir, "fixtures/audit/flag-wins");
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -950,7 +904,7 @@ test("--apply on a poetry project never runs uv migrate commands", async () => {
   ).toBe(false);
 });
 
-test("XDG_CONFIG_HOME wins over ~/.config/pmsec when CLI loads user config", async () => {
+test("XDG_CONFIG_HOME wins over ~/.config/mailclad when CLI loads user config", async () => {
   mkdirSync(
     nodePath.join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"),
     {
@@ -961,16 +915,16 @@ test("XDG_CONFIG_HOME wins over ~/.config/pmsec when CLI loads user config", asy
     import.meta.dir,
     "fixtures/discover/many-repos/alpha"
   );
-  const home = mkdtempSync(nodePath.join(tmpdir(), "pmsec-home-"));
-  const xdg = mkdtempSync(nodePath.join(tmpdir(), "pmsec-xdg-"));
-  mkdirSync(nodePath.join(home, ".config", "pmsec"), { recursive: true });
-  mkdirSync(nodePath.join(xdg, "pmsec"), { recursive: true });
+  const home = mkdtempSync(nodePath.join(tmpdir(), "mailclad-home-"));
+  const xdg = mkdtempSync(nodePath.join(tmpdir(), "mailclad-xdg-"));
+  mkdirSync(nodePath.join(home, ".config", "mailclad"), { recursive: true });
+  mkdirSync(nodePath.join(xdg, "mailclad"), { recursive: true });
   writeFileSync(
-    nodePath.join(home, ".config", "pmsec", "config.toml"),
+    nodePath.join(home, ".config", "mailclad", "config.toml"),
     `preset = "standard"\n`
   );
   writeFileSync(
-    nodePath.join(xdg, "pmsec", "config.toml"),
+    nodePath.join(xdg, "mailclad", "config.toml"),
     `preset = "relaxed"\n`
   );
   const stdout: string[] = [];
@@ -1035,7 +989,7 @@ test("--report creates missing parent directories and writes markdown", async ()
     import.meta.dir,
     "fixtures/discover/many-repos/alpha"
   );
-  const outDir = mkdtempSync(nodePath.join(tmpdir(), "pmsec-report-"));
+  const outDir = mkdtempSync(nodePath.join(tmpdir(), "mailclad-report-"));
   const reportPath = nodePath.join(outDir, "nested", "deep", "report.md");
   const result = await run(["audit", root, "--report", reportPath], {
     cache: createFsCache(

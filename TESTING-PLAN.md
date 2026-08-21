@@ -1,6 +1,6 @@
-# pmsec Testing Plan
+# mailclad Testing Plan
 
-> Audit of the current suite (2026-08-20, `feat/pmsec`, 220 tests / 13 files). Waves 1–4 are done. Tests stay at the eight seams in `PLAN.md`. Do not mock our own modules. Inject filesystem, PATH, runners, time, and cache dir.
+> Audit of the current suite (2026-08-20, `feat/mailclad`, 220 tests / 13 files). Waves 1–4 are done. Tests stay at the eight seams in `PLAN.md`. Do not mock our own modules. Inject filesystem, PATH, runners, time, and cache dir.
 
 **Goal:** Every product scenario from the grilling / `PLAN.md` has a named test at exactly one layer. No duplicate coverage across layers.
 
@@ -32,7 +32,7 @@ This is a local CLI, not a web app. Layers map like this:
 | **Business logic** | Discovery rules, 7-check matrix × PM × preset, leftover vs primary, apply write-rule, major-bump invariant, cache semantics | existing seam files | **~55%** |
 | **Integration** | `run()` / `auditPath` over fixture trees: policy files on disk, exit codes, report files, interactive stdin | `tests/cli.test.ts` + `tests/fixtures/` | ~25% |
 | **Contract** | Native audit JSON shapes we accept (npm classic `advisories`, npm v7+ `vulnerabilities`, pnpm, bun, yarn, uv) | `tests/advisories.test.ts` | ~5% |
-| **E2E / smoke** | Compiled `dist/pmsec audit` on `tests/fixtures/discover/many-repos` | later, one smoke | 1 test |
+| **E2E / smoke** | Compiled `dist/mailclad audit` on `tests/fixtures/discover/many-repos` | later, one smoke | 1 test |
 | **Perf** | Not v1. Optional later: 40-repo fixture under 5s settings-only | out | 0 |
 
 Do **not** add: browser e2e, tenant isolation, LLM evals, mutation testing on every PR.
@@ -77,10 +77,10 @@ Status: **done** = existing test name. **add** = write in the wave listed. **out
 | P3 | Per-PM table only affects that PM | business | done |
 | P4 | Flags beat per-PM tables | business | done |
 | P5 | Reject `[poetry]`/`[pip]`/`[pipenv]` policy tables | business | done |
-| P6 | CLI `--preset` beats repo `.pmsec.toml` | integration | done |
+| P6 | CLI `--preset` beats repo `.mailclad.toml` | integration | done |
 | P7 | `enabledManagers` omitting pnpm skips pnpm settings (leftover still reported) | business | done |
 | P8 | Invalid TOML in a layer is skipped or fails closed (pick one, test it) | business | done (skip layer) |
-| P9 | `XDG_CONFIG_HOME` wins over `~/.config/pmsec` when CLI loads files | integration | done |
+| P9 | `XDG_CONFIG_HOME` wins over `~/.config/mailclad` when CLI loads files | integration | done |
 
 ### 3.3 Settings — 7 checks × manager × preset
 
@@ -228,7 +228,7 @@ Preset severity:
 
 ### Wave 3 — product leftovers (done)
 
-Migrate-to-uv is not implemented: interactive poetry does not offer migrate and still uses OSV. Compiled-binary smoke: `bun run build:binary && ./dist/pmsec audit tests/fixtures/discover/many-repos --json`.
+Migrate-to-uv is not implemented: interactive poetry does not offer migrate and still uses OSV. Compiled-binary smoke: `bun run build:binary && ./dist/mailclad audit tests/fixtures/discover/many-repos --json`.
 
 ### Wave 4 — ratchet (done)
 

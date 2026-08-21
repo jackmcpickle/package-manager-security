@@ -98,7 +98,7 @@ test("apply writes pnpm keys to pnpm-workspace.yaml not .npmrc", () => {
   expect(files["/p/.npmrc"]).toBe("registry=https://registry.npmjs.org/\n");
 });
 
-test("apply writes pnpm minimumReleaseAge as 10080 minutes for standard", () => {
+test("apply writes pnpm minimumReleaseAge as 1440 minutes for standard", () => {
   const files: Record<string, string> = {
     "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
     "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
@@ -130,7 +130,7 @@ test("apply writes pnpm minimumReleaseAge as 10080 minutes for standard", () => 
     },
   });
   expect(result.skipped).toBeNull();
-  expect(files["/p/pnpm-workspace.yaml"]).toContain("minimumReleaseAge: 10080");
+  expect(files["/p/pnpm-workspace.yaml"]).toContain("minimumReleaseAge: 1440");
 });
 
 test("apply does not write leftover lockfiles or ~/.npmrc", () => {
@@ -317,7 +317,7 @@ test("two npm/pnpm roots sharing a gitRoot both get written without force", asyn
   expect(files["/repo/a/.npmrc"]).toContain("ignore-scripts=true");
   expect(files["/repo/b/pnpm-workspace.yaml"]).toContain("allowBuilds: {}");
   expect(files["/repo/b/pnpm-workspace.yaml"]).toContain(
-    "minimumReleaseAge: 10080"
+    "minimumReleaseAge: 1440"
   );
   expect(commits).toEqual([
     {
@@ -412,6 +412,7 @@ test("apply writes enableScripts: false to .yarnrc.yml preserving existing keys"
   expect(findings.map((f) => f.code)).toEqual([
     "scripts.unrestricted",
     "min-age.disabled",
+    "source.git-unrestricted",
   ]);
   const result = applySettings(project, findings, loadPolicy({}), {
     commit: false,
@@ -425,8 +426,9 @@ test("apply writes enableScripts: false to .yarnrc.yml preserving existing keys"
   expect(result.skipped).toBeNull();
   expect(result.written).toContain("/p/.yarnrc.yml");
   expect(files["/p/.yarnrc.yml"]).toContain("enableScripts: false");
-  // standard preset is 7 days, and yarn reads the gate in minutes.
-  expect(files["/p/.yarnrc.yml"]).toContain("npmMinimalAgeGate: 10080");
+  // standard preset is 1 day, and yarn reads the gate in minutes.
+  expect(files["/p/.yarnrc.yml"]).toContain("npmMinimalAgeGate: 1440");
+  expect(files["/p/.yarnrc.yml"]).toContain("approvedGitRepositories: []");
   expect(files["/p/.yarnrc.yml"]).toContain("npmRegistryServer");
 });
 
@@ -468,8 +470,8 @@ test("apply writes ignoreScripts to bunfig.toml preserving existing content", ()
   expect(result.skipped).toBeNull();
   expect(result.written).toContain("/p/bunfig.toml");
   expect(files["/p/bunfig.toml"]).toContain("ignoreScripts = true");
-  // standard preset is 7 days, and bun reads the gate in seconds.
-  expect(files["/p/bunfig.toml"]).toContain("minimumReleaseAge = 604800");
+  // standard preset is 1 day, and bun reads the gate in seconds.
+  expect(files["/p/bunfig.toml"]).toContain("minimumReleaseAge = 86400");
   expect(files["/p/bunfig.toml"]).toContain(
     'registry = "https://registry.npmjs.org/"'
   );
@@ -500,7 +502,10 @@ test("apply merges uv fix into existing [tool.uv] in pyproject.toml, not a new u
   const findings = auditSettings(project, loadPolicy({}), {
     readFile: (p) => files[p] ?? null,
   });
-  expect(findings.map((f) => f.code)).toEqual(["min-age.disabled"]);
+  expect(findings.map((f) => f.code)).toEqual([
+    "min-age.disabled",
+    "audit.malware-disabled",
+  ]);
   const result = applySettings(project, findings, loadPolicy({}), {
     commit: false,
     force: false,
@@ -517,6 +522,7 @@ test("apply merges uv fix into existing [tool.uv] in pyproject.toml, not a new u
     'index-strategy = "unsafe-best-match"'
   );
   expect(files["/p/pyproject.toml"]).toContain("exclude-newer");
+  expect(files["/p/pyproject.toml"]).toContain("malware-check = true");
 });
 
 test("apply writes uv fix into existing uv.toml", () => {
@@ -541,7 +547,10 @@ test("apply writes uv fix into existing uv.toml", () => {
   const findings = auditSettings(project, loadPolicy({}), {
     readFile: (p) => files[p] ?? null,
   });
-  expect(findings.map((f) => f.code)).toEqual(["min-age.disabled"]);
+  expect(findings.map((f) => f.code)).toEqual([
+    "min-age.disabled",
+    "audit.malware-disabled",
+  ]);
   const result = applySettings(project, findings, loadPolicy({}), {
     commit: false,
     force: false,
@@ -556,6 +565,85 @@ test("apply writes uv fix into existing uv.toml", () => {
   expect(files["/p/pyproject.toml"]).toBe(`[project]\nname = "x"\n`);
   expect(files["/p/uv.toml"]).toContain('index-strategy = "unsafe-best-match"');
   expect(files["/p/uv.toml"]).toContain("exclude-newer");
+  expect(files["/p/uv.toml"]).toContain("malware-check = true");
+});
+
+test("apply writes cargo minimum-release-age into .cargo/config.toml", () => {
+  const files: Record<string, string> = {
+    "/p/Cargo.lock": "# cargo\n",
+    "/p/Cargo.toml": '[package]\nname = "x"\nversion = "0.1.0"\n',
+  };
+  const project: Project = {
+    gitRoot: "/p",
+    managers: [
+      {
+        configPath: "/p/.cargo/config.toml",
+        lockfilePath: "/p/Cargo.lock",
+        manifestPath: "/p/Cargo.toml",
+        name: "cargo",
+        role: "primary",
+      },
+    ],
+    root: "/p",
+  };
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "min-age.disabled")).toBe(true);
+  expect(files["/p/.cargo/config.toml"]).toBeUndefined();
+  const result = applySettings(project, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  expect(result.skipped).toBeNull();
+  expect(result.written).toContain("/p/.cargo/config.toml");
+  expect(files["/p/.cargo/config.toml"]).toContain(
+    'minimum-release-age = "1d"'
+  );
+});
+
+test("apply merges cargo fix into existing .cargo/config.toml", () => {
+  const files: Record<string, string> = {
+    "/p/.cargo/config.toml":
+      '[source.crates-io]\nreplace-with = "vendored-sources"\n',
+    "/p/Cargo.lock": "# cargo\n",
+    "/p/Cargo.toml": '[package]\nname = "x"\nversion = "0.1.0"\n',
+  };
+  const project: Project = {
+    gitRoot: "/p",
+    managers: [
+      {
+        configPath: "/p/.cargo/config.toml",
+        lockfilePath: "/p/Cargo.lock",
+        manifestPath: "/p/Cargo.toml",
+        name: "cargo",
+        role: "primary",
+      },
+    ],
+    root: "/p",
+  };
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  const result = applySettings(project, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  expect(result.written).toContain("/p/.cargo/config.toml");
+  expect(files["/p/.cargo/config.toml"]).toContain("vendored-sources");
+  expect(files["/p/.cargo/config.toml"]).toContain(
+    'minimum-release-age = "1d"'
+  );
 });
 
 test("apply creates .npmrc when missing", () => {
@@ -689,7 +777,7 @@ test("apply creates missing pnpm-workspace.yaml, .yarnrc.yml, bunfig.toml, and u
     contains: string;
   }[] = [
     {
-      contains: "minimumReleaseAge: 10080",
+      contains: "minimumReleaseAge: 1440",
       created: "/p/pnpm-workspace.yaml",
       files: {
         "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
@@ -851,4 +939,75 @@ test("committed is false when git commit fails", () => {
     },
   });
   expect(result.committed).toBe(false);
+});
+
+test("apply writes BUNDLE_COOLDOWN to .bundle/config", () => {
+  const files: Record<string, string> = {
+    "/r/Gemfile": 'source "https://rubygems.org"\n',
+    "/r/Gemfile.lock": "GEM\n",
+  };
+  const project: Project = {
+    gitRoot: "/r",
+    managers: [
+      {
+        configPath: null,
+        lockfilePath: "/r/Gemfile.lock",
+        manifestPath: "/r/Gemfile",
+        name: "bundler",
+        role: "primary",
+      },
+    ],
+    root: "/r",
+  };
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  const result = applySettings(project, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  expect(result.skipped).toBeNull();
+  expect(result.written).toContain("/r/.bundle/config");
+  expect(files["/r/.bundle/config"]).toContain('BUNDLE_COOLDOWN: "1"');
+});
+
+test("apply updates existing .bundle/config preserving other keys", () => {
+  const files: Record<string, string> = {
+    "/r/.bundle/config":
+      '---\nBUNDLE_PATH: "vendor/bundle"\nBUNDLE_COOLDOWN: "0"\n',
+    "/r/Gemfile": 'source "https://rubygems.org"\n',
+    "/r/Gemfile.lock": "GEM\n",
+  };
+  const project: Project = {
+    gitRoot: "/r",
+    managers: [
+      {
+        configPath: "/r/.bundle/config",
+        lockfilePath: "/r/Gemfile.lock",
+        manifestPath: "/r/Gemfile",
+        name: "bundler",
+        role: "primary",
+      },
+    ],
+    root: "/r",
+  };
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  applySettings(project, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  expect(files["/r/.bundle/config"]).toContain('BUNDLE_COOLDOWN: "1"');
+  expect(files["/r/.bundle/config"]).toContain('BUNDLE_PATH: "vendor/bundle"');
 });

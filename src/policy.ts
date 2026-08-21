@@ -13,7 +13,7 @@ export const PRESET_DEFAULTS = {
   standard: {
     auditLevel: "high",
     ignoreScripts: true,
-    minReleaseAgeDays: 7,
+    minReleaseAgeDays: 1,
     requireLockfile: true,
     requirePmPin: true,
   },
@@ -32,9 +32,21 @@ const DEFAULT_ENABLED_MANAGERS: PackageManager[] = [
   "yarn",
   "bun",
   "uv",
+  "bundler",
+  "cargo",
+  "composer",
 ];
 
-const CONFIG_MANAGERS = new Set<string>(["npm", "pnpm", "yarn", "bun", "uv"]);
+const CONFIG_MANAGERS = new Set<string>([
+  "npm",
+  "pnpm",
+  "yarn",
+  "bun",
+  "uv",
+  "bundler",
+  "cargo",
+  "composer",
+]);
 
 const PACKAGE_MANAGERS = new Set<string>([
   ...CONFIG_MANAGERS,

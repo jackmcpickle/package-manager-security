@@ -22,8 +22,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Create GitHub release if missing
-        run: gh release view "$GITHUB_REF_NAME" || gh release create "$GITHUB_REF_NAME" --generate-notes
+      - name: Create GitHub release
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          notes_file="$(mktemp)"
+          if [ -f CHANGELOG.md ] && awk "/^## ${version} /{found=1; next} found && /^## /{exit} found" CHANGELOG.md | sed '/./,$!d' > "$notes_file" && [ -s "$notes_file" ]; then
+            echo "Using CHANGELOG.md for release notes"
+          else
+            echo "No CHANGELOG entry for v${version}; falling back to generated notes" > "$notes_file"
+            gh api "repos/${{ github.repository }}/releases/generate-notes" \
+              -f tag_name="$GITHUB_REF_NAME" \
+              -f target_commitish="${{ github.sha }}" \
+              --jq .body >> "$notes_file"
+          fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$notes_file"
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "$notes_file"
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -34,15 +51,15 @@ jobs:
       matrix:
         include:
           - target: bun-linux-x64
-            artifact: pmsec-linux-x64
+            artifact: mailclad-linux-x64
           - target: bun-linux-arm64
-            artifact: pmsec-linux-arm64
+            artifact: mailclad-linux-arm64
           - target: bun-darwin-x64
-            artifact: pmsec-darwin-x64
+            artifact: mailclad-darwin-x64
           - target: bun-darwin-arm64
-            artifact: pmsec-darwin-arm64
+            artifact: mailclad-darwin-arm64
           - target: bun-windows-x64
-            artifact: pmsec-windows-x64.exe
+            artifact: mailclad-windows-x64.exe
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -56,6 +73,9 @@ jobs:
   npm-publish:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -66,6 +86,6 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun test
       - run: bun run build
+      # Trusted publishing (OIDC) — no npm token; provenance is implied.
+      # Requires the Trusted Publisher config on npmjs.com for this repo/workflow.
       - run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

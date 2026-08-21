@@ -5,55 +5,9 @@ import path from "node:path";
 import { discoverProjects } from "../src/discover";
 import { loadPolicy } from "../src/policy";
 import { auditSettings } from "../src/settings";
+import { memoryFs } from "./helpers/memory-fs";
 
 const FIX = path.join(import.meta.dir, "fixtures/discover");
-
-const memoryFs = (
-  files: Record<string, string>,
-  extraDirs: string[] = []
-): {
-  isDir: (filePath: string) => boolean;
-  readDir: (dir: string) => string[];
-  readFile: (filePath: string) => string | null;
-} => {
-  const dirs = new Set<string>(["/", ...extraDirs]);
-  const addDir = (dir: string) => {
-    let current = dir;
-    while (current && current !== "/") {
-      dirs.add(current);
-      current = path.dirname(current);
-    }
-  };
-  for (const file of Object.keys(files)) {
-    addDir(path.dirname(file));
-  }
-  for (const dir of extraDirs) {
-    addDir(dir);
-  }
-
-  return {
-    isDir(filePath: string): boolean {
-      return dirs.has(filePath);
-    },
-    readDir(dir: string): string[] {
-      const prefix = dir.endsWith("/") ? dir : `${dir}/`;
-      const names = new Set<string>();
-      for (const entry of [...dirs, ...Object.keys(files)]) {
-        if (!entry.startsWith(prefix)) {
-          continue;
-        }
-        const [name] = entry.slice(prefix.length).split("/");
-        if (name) {
-          names.add(name);
-        }
-      }
-      return [...names];
-    },
-    readFile(filePath: string): string | null {
-      return files[filePath] ?? null;
-    },
-  };
-};
 
 for (const rel of [
   "many-repos/alpha",
@@ -141,6 +95,69 @@ test("yarn berry is primary and yarn classic is unsupported", () => {
       (m) => m.name === "yarn" && m.role === "unsupported"
     )
   ).toBe(true);
+});
+
+test("cargo.toml is a primary cargo manager and coexists with npm", () => {
+  const both = discoverProjects(
+    "/app",
+    memoryFs({
+      "/app/Cargo.lock": "# cargo\n",
+      "/app/Cargo.toml": '[package]\nname = "app"\nversion = "0.1.0"\n',
+      "/app/package-lock.json": `{"lockfileVersion":3}`,
+      "/app/package.json": `{"name":"app","packageManager":"npm@10.9.0"}`,
+    })
+  );
+  expect(
+    both[0]?.managers.some((m) => m.name === "npm" && m.role === "primary")
+  ).toBe(true);
+  expect(
+    both[0]?.managers.some((m) => m.name === "cargo" && m.role === "primary")
+  ).toBe(true);
+  const cargo = both[0]?.managers.find((m) => m.name === "cargo");
+  expect(cargo).toEqual({
+    configPath: "/app/.cargo/config.toml",
+    lockfilePath: "/app/Cargo.lock",
+    manifestPath: "/app/Cargo.toml",
+    name: "cargo",
+    role: "primary",
+  });
+});
+
+test("cargo uses .cargo/config when config.toml is absent", () => {
+  const projects = discoverProjects(
+    "/rust",
+    memoryFs({
+      "/rust/.cargo/config": '[install]\nminimum-release-age = "1d"\n',
+      "/rust/Cargo.lock": "# cargo\n",
+      "/rust/Cargo.toml": '[package]\nname = "rust"\nversion = "0.1.0"\n',
+    })
+  );
+  const cargo = projects[0]?.managers.find((m) => m.name === "cargo");
+  expect(cargo?.configPath).toBe("/rust/.cargo/config");
+});
+
+test("stray Cargo.lock beside npm without Cargo.toml is leftover cargo", () => {
+  const projects = discoverProjects(
+    "/app",
+    memoryFs({
+      "/app/Cargo.lock": "# cargo\n",
+      "/app/package-lock.json": `{"lockfileVersion":3}`,
+      "/app/package.json": `{"name":"app","packageManager":"npm@10.9.0"}`,
+    })
+  );
+  expect(
+    projects[0]?.managers.some((m) => m.name === "npm" && m.role === "primary")
+  ).toBe(true);
+  expect(
+    projects[0]?.managers.some(
+      (m) => m.name === "cargo" && m.role === "leftover"
+    )
+  ).toBe(true);
+  expect(
+    projects[0]?.managers.some(
+      (m) => m.name === "cargo" && m.role === "primary"
+    )
+  ).toBe(false);
 });
 
 test("bun and uv markers are primary managers", () => {
@@ -510,4 +527,62 @@ test("skip directories are not walked for repos or PM roots", () => {
     )
   );
   expect(projects.map((p) => p.root)).toEqual(["/root"]);
+});
+
+test("Gemfile without lockfile is a bundler primary", () => {
+  const projects = discoverProjects(
+    "/ruby",
+    memoryFs({
+      "/ruby/Gemfile": 'source "https://rubygems.org"\n',
+    })
+  );
+  expect(projects[0]?.managers).toEqual([
+    {
+      configPath: null,
+      lockfilePath: null,
+      manifestPath: "/ruby/Gemfile",
+      name: "bundler",
+      role: "primary",
+    },
+  ]);
+});
+
+test("Gemfile with Gemfile.lock and .bundle/config is detected", () => {
+  const projects = discoverProjects(
+    "/ruby",
+    memoryFs({
+      "/ruby/.bundle/config": '---\nBUNDLE_COOLDOWN: "1"\n',
+      "/ruby/Gemfile": 'source "https://rubygems.org"\n',
+      "/ruby/Gemfile.lock": "GEM\n  remote: https://rubygems.org/\n",
+    })
+  );
+  expect(projects[0]?.managers).toEqual([
+    {
+      configPath: "/ruby/.bundle/config",
+      lockfilePath: "/ruby/Gemfile.lock",
+      manifestPath: "/ruby/Gemfile",
+      name: "bundler",
+      role: "primary",
+    },
+  ]);
+});
+
+test("nested Gemfile is a separate PM root", () => {
+  const projects = discoverProjects(
+    "/mono",
+    memoryFs(
+      {
+        "/mono/package-lock.json": `{"lockfileVersion":3}`,
+        "/mono/package.json": `{"name":"mono"}`,
+        "/mono/services/api/Gemfile": 'source "https://rubygems.org"\n',
+        "/mono/services/api/Gemfile.lock": "GEM\n",
+      },
+      ["/mono/.git"]
+    )
+  );
+  const api = projects.find((p) => p.root.endsWith("api"));
+  expect(api?.gitRoot?.endsWith("mono")).toBe(true);
+  expect(
+    api?.managers.some((m) => m.name === "bundler" && m.role === "primary")
+  ).toBe(true);
 });

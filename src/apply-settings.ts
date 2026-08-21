@@ -1,5 +1,12 @@
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
+import { APP_NAME } from "./app-name";
+import { parseBundleConfig, stringifyBundleConfig } from "./bundle-config";
+import {
+  mergeComposerManifest,
+  parseComposerManifest,
+  stringifyComposerManifest,
+} from "./composer-config";
 import type {
   DetectedManager,
   Finding,
@@ -30,7 +37,7 @@ export interface ApplySettingsItem {
   policy: Policy;
 }
 
-const COMMIT_MESSAGE = "chore: apply pmsec security settings";
+const COMMIT_MESSAGE = `chore: apply ${APP_NAME} security settings`;
 
 interface ResolvedSettings {
   minReleaseAgeDays: number;
@@ -244,23 +251,38 @@ const npmrcUpdates = (
   codes: Set<string>,
   settings: ResolvedSettings
 ): Record<string, string> => {
+  const fixes: [
+    string,
+    Record<string, string> | (() => Record<string, string>),
+  ][] = [
+    ["scripts.unrestricted", { "ignore-scripts": "true" }],
+    [
+      "audit.disabled",
+      () => ({ audit: "true", "audit-level": settings.auditLevel }),
+    ],
+    [
+      "min-age.disabled",
+      () => ({ "min-release-age": String(settings.minReleaseAgeDays) }),
+    ],
+    [
+      "source.non-registry",
+      {
+        "allow-directory": "none",
+        "allow-file": "none",
+        "allow-git": "none",
+        "allow-remote": "none",
+      },
+    ],
+    ["scripts.pin-missing", { "allow-scripts-pin": "true" }],
+    ["scripts.bypass-enabled", { "dangerously-allow-all-scripts": "false" }],
+    ["registry.unpinned", { registry: DEFAULT_REGISTRY }],
+  ];
   const updates: Record<string, string> = {};
-  if (codes.has("scripts.unrestricted")) {
-    updates["ignore-scripts"] = "true";
-  }
-  if (codes.has("audit.disabled")) {
-    updates.audit = "true";
-    updates["audit-level"] = settings.auditLevel;
-  }
-  if (codes.has("min-age.disabled")) {
-    updates["min-release-age"] = String(settings.minReleaseAgeDays);
-  }
-  if (codes.has("source.non-registry")) {
-    updates["allow-git"] = "none";
-    updates["allow-remote"] = "none";
-  }
-  if (codes.has("registry.unpinned")) {
-    updates.registry = DEFAULT_REGISTRY;
+  for (const [code, fix] of fixes) {
+    if (!codes.has(code)) {
+      continue;
+    }
+    Object.assign(updates, typeof fix === "function" ? fix() : fix);
   }
   return updates;
 };
@@ -350,6 +372,21 @@ const applyPnpmAuditAndAge = (
   }
 };
 
+const applyPnpmSecurity = (
+  yaml: Record<string, unknown>,
+  codes: Set<string>
+): void => {
+  if (codes.has("provenance.no-downgrade")) {
+    yaml.trustPolicy = "no-downgrade";
+  }
+  if (codes.has("lockfile.trust-bypass")) {
+    yaml.trustLockfile = false;
+  }
+  if (codes.has("lockfile.run-verify")) {
+    yaml.verifyDepsBeforeRun = "error";
+  }
+};
+
 const applyPnpmRegistry = (
   yaml: Record<string, unknown>,
   codes: Set<string>
@@ -375,6 +412,7 @@ const mergePnpmYaml = (
   const { value: yaml } = parsed;
   applyPnpmScripts(yaml, codes);
   applyPnpmAuditAndAge(yaml, codes, settings);
+  applyPnpmSecurity(yaml, codes);
   applyPnpmRegistry(yaml, codes);
   return stringifyYaml(yaml);
 };
@@ -390,6 +428,9 @@ const applyYarnScriptsAndAudit = (
     delete yaml.audit;
     delete yaml.npmAudit;
     yaml.enableNpmAudit = true;
+  }
+  if (codes.has("source.git-unrestricted")) {
+    yaml.approvedGitRepositories = [];
   }
 };
 
@@ -481,17 +522,11 @@ const mergeBunfig = (
   return `${stringifyToml(table).trimEnd()}\n`;
 };
 
-const mergeUv = (
-  raw: string,
+const applyUvFixes = (
+  target: Record<string, unknown>,
   codes: Set<string>,
   settings: ResolvedSettings
-): string | null => {
-  const parsed = parseTomlObject(raw);
-  if (!parsed.ok) {
-    return null;
-  }
-  const table = parsed.value;
-  const target = uvWriteTable(table);
+): void => {
   if (codes.has("min-age.disabled")) {
     target["exclude-newer"] = new Date(
       Date.now() - settings.minReleaseAgeDays * 86_400_000
@@ -509,7 +544,72 @@ const mergeUv = (
   if (codes.has("registry.unpinned")) {
     target["index-strategy"] = "first-index";
   }
+  if (codes.has("audit.malware-disabled")) {
+    const audit = isPlainObject(target.audit) ? target.audit : {};
+    audit["malware-check"] = true;
+    target.audit = audit;
+  }
+};
+
+const mergeUv = (
+  raw: string,
+  codes: Set<string>,
+  settings: ResolvedSettings
+): string | null => {
+  const parsed = parseTomlObject(raw);
+  if (!parsed.ok) {
+    return null;
+  }
+  const table = parsed.value;
+  const target = uvWriteTable(table);
+  applyUvFixes(target, codes, settings);
   return `${stringifyToml(table).trimEnd()}\n`;
+};
+
+/** Only called for a positive `days`; the min-age fix is skipped at or below 0. */
+const cargoDuration = (days: number): string => {
+  if (days % 7 === 0) {
+    return `${days / 7}w`;
+  }
+  return `${days}d`;
+};
+
+const mergeCargo = (
+  raw: string,
+  codes: Set<string>,
+  settings: ResolvedSettings
+): string | null => {
+  const parsed = parseTomlObject(raw);
+  if (!parsed.ok) {
+    return null;
+  }
+  const table = parsed.value;
+  const install = isPlainObject(table.install) ? table.install : {};
+  if (codes.has("min-age.disabled")) {
+    install["minimum-release-age"] = cargoDuration(settings.minReleaseAgeDays);
+  }
+  table.install = install;
+  return `${stringifyToml(table).trimEnd()}\n`;
+};
+
+const mergeComposer = (raw: string, codes: Set<string>): string | null => {
+  const parsed = parseComposerManifest(raw);
+  if (parsed === null) {
+    return null;
+  }
+  return stringifyComposerManifest(mergeComposerManifest(parsed, codes));
+};
+
+const mergeBundleConfig = (
+  raw: string,
+  codes: Set<string>,
+  settings: ResolvedSettings
+): string => {
+  const config = parseBundleConfig(raw);
+  if (codes.has("min-age.disabled")) {
+    config["BUNDLE_COOLDOWN"] = String(settings.minReleaseAgeDays);
+  }
+  return stringifyBundleConfig(config);
 };
 
 const renderConfig = (
@@ -529,6 +629,15 @@ const renderConfig = (
   }
   if (manager === "bun") {
     return mergeBunfig(raw, codes, settings);
+  }
+  if (manager === "cargo") {
+    return mergeCargo(raw, codes, settings);
+  }
+  if (manager === "bundler") {
+    return mergeBundleConfig(raw, codes, settings);
+  }
+  if (manager === "composer") {
+    return mergeComposer(raw, codes);
   }
   return mergeUv(raw, codes, settings);
 };
@@ -557,31 +666,28 @@ const uvConfigPath = (
   return uvToml;
 };
 
+const LOCAL_CONFIG_FILE: Partial<Record<PackageManager, string>> = {
+  bun: "bunfig.toml",
+  bundler: ".bundle/config",
+  composer: "composer.json",
+  npm: ".npmrc",
+  pnpm: "pnpm-workspace.yaml",
+  yarn: ".yarnrc.yml",
+};
+
 const configPathFor = (
   project: Project,
   manager: DetectedManager,
   readFile: (path: string) => string | null
 ): string | null => {
-  switch (manager.name) {
-    case "npm": {
-      return localPath(project.root, ".npmrc");
-    }
-    case "pnpm": {
-      return localPath(project.root, "pnpm-workspace.yaml");
-    }
-    case "yarn": {
-      return localPath(project.root, ".yarnrc.yml");
-    }
-    case "bun": {
-      return localPath(project.root, "bunfig.toml");
-    }
-    case "uv": {
-      return uvConfigPath(project, manager, readFile);
-    }
-    default: {
-      return null;
-    }
+  if (manager.name === "uv") {
+    return uvConfigPath(project, manager, readFile);
   }
+  if (manager.name === "cargo") {
+    return manager.configPath ?? localPath(project.root, ".cargo/config.toml");
+  }
+  const file = LOCAL_CONFIG_FILE[manager.name];
+  return file ? localPath(project.root, file) : null;
 };
 
 const isSettingsFix = (finding: Finding): boolean =>
