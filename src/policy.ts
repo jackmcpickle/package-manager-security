@@ -1,6 +1,8 @@
 import { parse } from "smol-toml";
 
 import type { PackageManager, Policy, PresetName } from "./domain";
+import { ALL_MANAGER_NAMES, CONFIG_MANAGER_NAMES } from "./managers/profile";
+import { isPlainObject } from "./std";
 
 export const PRESET_DEFAULTS = {
   relaxed: {
@@ -26,34 +28,9 @@ export const PRESET_DEFAULTS = {
   },
 } as const;
 
-const DEFAULT_ENABLED_MANAGERS: PackageManager[] = [
-  "npm",
-  "pnpm",
-  "yarn",
-  "bun",
-  "uv",
-  "bundler",
-  "cargo",
-  "composer",
-];
+const CONFIG_MANAGERS = new Set<string>(CONFIG_MANAGER_NAMES);
 
-const CONFIG_MANAGERS = new Set<string>([
-  "npm",
-  "pnpm",
-  "yarn",
-  "bun",
-  "uv",
-  "bundler",
-  "cargo",
-  "composer",
-]);
-
-const PACKAGE_MANAGERS = new Set<string>([
-  ...CONFIG_MANAGERS,
-  "poetry",
-  "pip",
-  "pipenv",
-]);
+const PACKAGE_MANAGERS = new Set<string>(ALL_MANAGER_NAMES);
 
 const RESERVED_KEYS = new Set(["preset", "enabledManagers"]);
 
@@ -65,9 +42,6 @@ const isConfigManager = (value: unknown): value is PackageManager =>
 
 const isPackageManager = (value: unknown): value is PackageManager =>
   typeof value === "string" && PACKAGE_MANAGERS.has(value);
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 interface LayerAcc {
   preset?: PresetName;
@@ -175,7 +149,7 @@ export const loadPolicy = (input: {
   flags?: { preset?: PresetName; overrides?: Record<string, unknown> };
 }): Policy => {
   const state: PolicyState = {
-    enabledManagers: [...DEFAULT_ENABLED_MANAGERS],
+    enabledManagers: [...CONFIG_MANAGER_NAMES],
     overrides: {},
     preset: "standard",
     tables: {},
@@ -198,5 +172,53 @@ export const loadPolicy = (input: {
     overrides: state.overrides,
     perManager,
     preset: state.preset,
+  };
+};
+
+export interface PolicyLayers {
+  userToml?: string;
+  scanToml?: string;
+  flags?: { preset?: PresetName; overrides?: Record<string, unknown> };
+}
+
+/** Full stack for one repo: user < scan < repo < flags. One parse, one merge. */
+export const policyForRepo = (
+  layers: PolicyLayers,
+  repoToml?: string
+): Policy => loadPolicy({ ...layers, repoToml });
+
+export interface ResolvedSettings {
+  auditLevel: string;
+  ignoreScripts: boolean;
+  minReleaseAgeDays: number;
+  requireLockfile: boolean;
+  requirePmPin: boolean;
+}
+
+export const resolveSettings = (
+  policy: Policy,
+  manager: PackageManager
+): ResolvedSettings => {
+  const base = PRESET_DEFAULTS[policy.preset];
+  const extra = { ...policy.overrides, ...policy.perManager[manager] };
+  return {
+    auditLevel:
+      typeof extra.auditLevel === "string" ? extra.auditLevel : base.auditLevel,
+    ignoreScripts:
+      typeof extra.ignoreScripts === "boolean"
+        ? extra.ignoreScripts
+        : base.ignoreScripts,
+    minReleaseAgeDays:
+      typeof extra.minReleaseAgeDays === "number"
+        ? extra.minReleaseAgeDays
+        : base.minReleaseAgeDays,
+    requireLockfile:
+      typeof extra.requireLockfile === "boolean"
+        ? extra.requireLockfile
+        : base.requireLockfile,
+    requirePmPin:
+      typeof extra.requirePmPin === "boolean"
+        ? extra.requirePmPin
+        : base.requirePmPin,
   };
 };

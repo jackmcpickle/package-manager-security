@@ -1,18 +1,10 @@
-import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { expect, test } from "bun:test";
 
 import { applyAdvisories } from "../src/apply-advisories";
 import { auditPath } from "../src/audit";
-import { createFsCache } from "../src/cache";
 import type { Finding, PackageManager, Project } from "../src/domain";
+import { createMemoryCache } from "../src/memory-cache";
 import { loadPolicy } from "../src/policy";
-
-const cacheDir = mkdtempSync(path.join(tmpdir(), "mailclad-apply-adv-"));
-afterAll(() => {
-  rmSync(cacheDir, { force: true, recursive: true });
-});
 
 const project: Project = {
   gitRoot: "/p",
@@ -438,17 +430,11 @@ test("apply-advisories without version maps upgrades from advisory JSON fields",
   };
   const ran: string[][] = [];
   const result = await auditPath("/p", {
-    allowMajors: false,
-    apply: false,
-    applyAdvisories: true,
     concurrency: 1,
     deps: {
+      digest: (bytes) => bytes,
       ...memoryTree(files, ["/p/.git"]),
-      cache: createFsCache(
-        path.join(cacheDir, "from-findings"),
-        () => 1000,
-        86_400_000
-      ),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       now: () => 1000,
       run: (argv) => {
         ran.push(argv);
@@ -474,8 +460,19 @@ test("apply-advisories without version maps upgrades from advisory JSON fields",
       },
       which: () => "/usr/bin/npm",
     },
-    interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
+    mode: {
+      advisories: true,
+      allowMajors: false,
+      kind: "apply",
+      settings: false,
+      write: {
+        commit: false,
+        force: false,
+        gitStatus: () => "clean",
+        writeFile: () => {},
+      },
+    },
   });
   const finding = result.projects[0]?.findings.find(
     (row) => row.kind === "advisory"
@@ -514,19 +511,11 @@ test("--apply --apply-advisories still applies advisories after the settings wri
   let tree: "clean" | "dirty" = "clean";
   const ran: string[][] = [];
   const result = await auditPath("/p", {
-    allowMajors: false,
-    apply: true,
-    applyAdvisories: true,
-    commit: false,
     concurrency: 1,
     deps: {
+      digest: (bytes) => bytes,
       ...memoryTree(files, ["/p/.git"]),
-      cache: createFsCache(
-        path.join(cacheDir, "dirty-after-apply"),
-        () => 1000,
-        86_400_000
-      ),
-      gitStatus: () => tree,
+      cache: createMemoryCache(() => 1000, 86_400_000),
       now: () => 1000,
       run: (argv) => {
         ran.push(argv);
@@ -536,14 +525,23 @@ test("--apply --apply-advisories still applies advisories after the settings wri
         return { code: 0, stderr: "", stdout: "" };
       },
       which: () => "/usr/bin/npm",
-      writeFile: (p, b) => {
-        files[p] = b;
-        tree = "dirty";
+    },
+    layers: {},
+    mode: {
+      advisories: true,
+      allowMajors: false,
+      kind: "apply",
+      settings: true,
+      write: {
+        commit: false,
+        force: false,
+        gitStatus: () => tree,
+        writeFile: (p, b) => {
+          files[p] = b;
+          tree = "dirty";
+        },
       },
     },
-    force: false,
-    interactive: false,
-    policy: loadPolicy({}),
   });
   expect(files["/p/.npmrc"]).toContain("ignore-scripts=true");
   expect(ran).toContainEqual([
@@ -565,21 +563,12 @@ test("interactive both applies advisories after the settings write dirties the t
   let tree: "clean" | "dirty" = "clean";
   const ran: string[][] = [];
   const result = await auditPath("/p", {
-    allowMajors: false,
-    apply: false,
-    applyAdvisories: false,
-    commit: false,
     concurrency: 1,
     deps: {
+      digest: (bytes) => bytes,
       ...memoryTree(files, ["/p/.git"]),
-      cache: createFsCache(
-        path.join(cacheDir, "dirty-after-both"),
-        () => 1000,
-        86_400_000
-      ),
-      gitStatus: () => tree,
+      cache: createMemoryCache(() => 1000, 86_400_000),
       now: () => 1000,
-      prompt: () => "both" as const,
       run: (argv) => {
         ran.push(argv);
         if (argv.includes("audit")) {
@@ -588,14 +577,21 @@ test("interactive both applies advisories after the settings write dirties the t
         return { code: 0, stderr: "", stdout: "" };
       },
       which: () => "/usr/bin/npm",
-      writeFile: (p, b) => {
-        files[p] = b;
-        tree = "dirty";
+    },
+    layers: {},
+    mode: {
+      kind: "interactive",
+      prompt: () => "both" as const,
+      write: {
+        commit: false,
+        force: false,
+        gitStatus: () => tree,
+        writeFile: (p, b) => {
+          files[p] = b;
+          tree = "dirty";
+        },
       },
     },
-    force: false,
-    interactive: true,
-    policy: loadPolicy({}),
   });
   expect(files["/p/.npmrc"]).toContain("ignore-scripts=true");
   expect(ran).toContainEqual([
@@ -615,20 +611,12 @@ test("interactive advisories choice allows a major upgrade", async () => {
   };
   const ran: string[][] = [];
   await auditPath("/p", {
-    allowMajors: false,
-    apply: false,
-    applyAdvisories: false,
     concurrency: 1,
     deps: {
+      digest: (bytes) => bytes,
       ...memoryTree(files, ["/p/.git"]),
-      cache: createFsCache(
-        path.join(cacheDir, "interactive-major"),
-        () => 1000,
-        86_400_000
-      ),
-      gitStatus: () => "clean" as const,
+      cache: createMemoryCache(() => 1000, 86_400_000),
       now: () => 1000,
-      prompt: () => "advisories" as const,
       run: (argv) => {
         ran.push(argv);
         if (argv.includes("audit")) {
@@ -653,8 +641,17 @@ test("interactive advisories choice allows a major upgrade", async () => {
       },
       which: () => "/usr/bin/npm",
     },
-    interactive: true,
-    policy: loadPolicy({}),
+    layers: {},
+    mode: {
+      kind: "interactive",
+      prompt: () => "advisories" as const,
+      write: {
+        commit: false,
+        force: false,
+        gitStatus: () => "clean" as const,
+        writeFile: () => {},
+      },
+    },
   });
   expect(ran).toContainEqual([
     "npm",
@@ -681,13 +678,11 @@ test("audit concurrency pools advisory runs and keeps apply serial", async () =>
   let applyInFlight = 0;
   let maxApply = 0;
   const result = await auditPath("/repo", {
-    allowMajors: false,
-    apply: false,
-    applyAdvisories: true,
     concurrency: 2,
     deps: {
+      digest: (bytes) => bytes,
       ...memoryTree(files, ["/repo/.git"]),
-      cache: createFsCache(cacheDir, () => 1000, 86_400_000),
+      cache: createMemoryCache(() => 1000, 86_400_000),
       currentVersions: { "left-pad": "1.0.0" },
       fixVersions: { "left-pad": "1.3.0" },
       now: () => 1000,
@@ -721,8 +716,19 @@ test("audit concurrency pools advisory runs and keeps apply serial", async () =>
       },
       which: () => "/usr/bin/npm",
     },
-    interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
+    mode: {
+      advisories: true,
+      allowMajors: false,
+      kind: "apply",
+      settings: false,
+      write: {
+        commit: false,
+        force: false,
+        gitStatus: () => "clean",
+        writeFile: () => {},
+      },
+    },
   });
   expect(result.projects).toHaveLength(3);
   expect(maxAudit).toBeGreaterThan(1);

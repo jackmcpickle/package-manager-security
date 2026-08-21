@@ -577,6 +577,23 @@ test("a wildcard exclude-newer-package voids the uv gate", () => {
   expect(codes("uv", files)).toContain("min-age.exclude-all");
 });
 
+test("exclude-newer-package fix drops only blanket keys and keeps any value type", () => {
+  const files = uvFiles(
+    `exclude-newer = "1 days"\n\n[tool.uv.exclude-newer-package]\n"*" = false\nleft-pad = true\nrequests = { exclude-newer = "2 days" }\n`
+  );
+  const found = find("uv", files, "min-age.exclude-all");
+  expect(found?.fix?.edits).toEqual([
+    {
+      key: "tool.uv.exclude-newer-package",
+      op: "set",
+      value: {
+        "left-pad": true,
+        requests: { "exclude-newer": "2 days" },
+      },
+    },
+  ]);
+});
+
 test("uv with audit malware-check true passes", () => {
   const files = uvFiles(
     `exclude-newer = "1 days"\n\n[tool.uv.audit]\nmalware-check = true\n`
@@ -606,6 +623,32 @@ test("uv malware-check in uv.toml is honored", () => {
 });
 
 // --- apply ------------------------------------------------------------------
+
+test("apply keeps existing allowBuilds entries of any type and does not overwrite them", () => {
+  const files = pnpmFiles(
+    "11.7.0",
+    "minimumReleaseAge: 1440\ndangerouslyAllowAllBuilds: true\nallowBuilds:\n  esbuild: yes\nonlyBuiltDependencies:\n  - esbuild\n  - core-js\n"
+  );
+  const target = project("pnpm");
+  const findings = auditSettings(target, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "scripts.unrestricted")).toBe(true);
+  applySettings(target, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  const written = files["/p/pnpm-workspace.yaml"] ?? "";
+  expect(written).toContain("esbuild: yes");
+  expect(written).toContain("core-js: true");
+  expect(written).not.toContain("esbuild: true");
+  expect(written).not.toContain("onlyBuiltDependencies");
+});
 
 test("apply migrates the pnpm legacy build allowlist into allowBuilds", () => {
   const files = pnpmFiles(
@@ -720,4 +763,71 @@ test("apply sets audit malware-check on uv", () => {
     },
   });
   expect(files["/p/pyproject.toml"]).toContain("malware-check = true");
+});
+
+test("pnpm min-age finding carries minutes and legacy migration unsets only present keys", () => {
+  const files = pnpmFiles(
+    "11.7.0",
+    "onlyBuiltDependencies:\n  - esbuild\nneverBuiltDependencies:\n  - core-js\n"
+  );
+  const legacy = find("pnpm", files, "scripts.legacy-config");
+  expect(legacy?.fix).toEqual({
+    edits: [
+      { key: "dangerouslyAllowAllBuilds", op: "set", value: false },
+      { key: "onlyBuiltDependencies", op: "unset" },
+      { key: "neverBuiltDependencies", op: "unset" },
+      {
+        key: "allowBuilds",
+        op: "set",
+        value: { "core-js": false, esbuild: true },
+      },
+    ],
+    file: "/p/pnpm-workspace.yaml",
+    format: "yaml",
+  });
+});
+
+test("yarn min-age finding carries minutes", () => {
+  const files = yarnFiles("3.2.0", "enableScripts: false\n");
+  const found = find("yarn", files, "min-age.disabled");
+  expect(found?.fix).toEqual({
+    edits: [{ key: "npmMinimalAgeGate", op: "set", value: 1440 }],
+    file: "/p/.yarnrc.yml",
+    format: "yaml",
+  });
+});
+
+test("bun min-age finding carries seconds", () => {
+  const files = bunFiles("");
+  const found = find("bun", files, "min-age.disabled");
+  expect(found?.fix).toEqual({
+    edits: [{ key: "install.minimumReleaseAge", op: "set", value: 86_400 }],
+    file: "/p/bunfig.toml",
+    format: "toml",
+  });
+});
+
+test("cargo min-age finding carries a duration string", () => {
+  const files = cargoFiles("");
+  const found = find("cargo", files, "min-age.disabled");
+  expect(found?.fix).toEqual({
+    edits: [{ key: "install.minimum-release-age", op: "set", value: "1d" }],
+    file: "/p/.cargo/config.toml",
+    format: "toml",
+  });
+});
+
+test("uv min-age finding writes the computed path with a dotted key prefix", () => {
+  const files = uvFiles("");
+  const found = find("uv", files, "min-age.disabled");
+  expect(found?.fix?.file).toBe("/p/pyproject.toml");
+  expect(found?.fix?.format).toBe("toml");
+  expect(found?.fix?.edits).toEqual([
+    expect.objectContaining({
+      key: "tool.uv.exclude-newer",
+      op: "set",
+    }),
+  ]);
+  const value = found?.fix?.edits[0];
+  expect(value?.op === "set" ? typeof value.value : "").toBe("string");
 });

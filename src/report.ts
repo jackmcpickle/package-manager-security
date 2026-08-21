@@ -1,8 +1,8 @@
 import { APP_NAME } from "./app-name";
 import type { AuditResult } from "./audit";
+import { gitRootOf, isAdvisoryKind } from "./domain";
 import type { Finding, Severity } from "./domain";
 
-const ADVISORY_KINDS = new Set(["advisory", "deprecated", "quarantine"]);
 const SEVERITIES: Severity[] = ["critical", "high", "moderate", "low", "info"];
 
 const ANSI = {
@@ -44,7 +44,7 @@ const countAdvisories = (findings: Finding[]): Record<Severity, number> => {
     moderate: 0,
   };
   for (const finding of findings) {
-    if (ADVISORY_KINDS.has(finding.kind)) {
+    if (isAdvisoryKind(finding.kind)) {
       counts[finding.severity] += 1;
     }
   }
@@ -52,10 +52,21 @@ const countAdvisories = (findings: Finding[]): Record<Severity, number> => {
 };
 
 const countRepos = (projects: AuditResult["projects"]): number =>
-  new Set(projects.map(({ project }) => project.gitRoot ?? project.root)).size;
+  new Set(projects.map(({ project }) => gitRootOf(project))).size;
+
+const withoutFix = (finding: Finding): Finding => {
+  const { fix: _fix, ...rest } = finding;
+  return rest;
+};
 
 export const formatJson = (result: AuditResult): string =>
-  `${JSON.stringify(result)}\n`;
+  `${JSON.stringify({
+    ...result,
+    projects: result.projects.map((row) => ({
+      ...row,
+      findings: row.findings.map(withoutFix),
+    })),
+  })}\n`;
 
 export const formatMarkdown = (result: AuditResult): string => {
   const lines = [`# ${APP_NAME} report`, ""];
@@ -115,7 +126,7 @@ export const formatHuman = (
   const findings = result.projects.flatMap((row) => row.findings);
   const settingsCount = findings.filter(
     (finding) =>
-      finding.kind !== "missing-binary" && !ADVISORY_KINDS.has(finding.kind)
+      finding.kind !== "missing-binary" && !isAdvisoryKind(finding.kind)
   ).length;
   const warningsCount = findings.filter(
     (finding) => finding.kind === "missing-binary"

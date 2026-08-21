@@ -1,33 +1,31 @@
-import { readFileSync } from "node:fs";
-
 import { parse as parseTomlRaw } from "smol-toml";
 
 import { parseBundleConfig } from "./bundle-config";
 import { parseComposerManifest, readComposerSecurity } from "./composer-config";
+import { severityAtLeast } from "./domain";
 import type {
+  ConfigEdit,
+  ConfigEditValue,
+  ConfigFormat,
   DetectedManager,
   Finding,
   PackageManager,
   Policy,
   PresetName,
   Project,
+  SettingsFix,
   Severity,
 } from "./domain";
-import { PRESET_DEFAULTS } from "./policy";
+import { profileFor } from "./managers/profile";
+import { resolveSettings } from "./policy";
+import type { ResolvedSettings } from "./policy";
+import { hasText, isPlainObject, isStar } from "./std";
 
 export interface SettingsFs {
-  readFile?: (path: string) => string | null;
+  readFile: (path: string) => string | null;
 }
 
 type ReadFile = (path: string) => string | null;
-
-interface ResolvedSettings {
-  ignoreScripts: boolean;
-  minReleaseAgeDays: number;
-  auditLevel: string;
-  requireLockfile: boolean;
-  requirePmPin: boolean;
-}
 
 interface ManagerVersion {
   major: number;
@@ -42,14 +40,6 @@ type ManagerAuditor = (
   readFile: ReadFile
 ) => Finding[];
 
-const AUDIT_RANK: Record<string, number> = {
-  critical: 4,
-  high: 3,
-  info: 0,
-  low: 1,
-  moderate: 2,
-};
-
 const PNPM_LEGACY_BUILD_KEYS = [
   "onlyBuiltDependencies",
   "onlyBuiltDependenciesFile",
@@ -57,12 +47,6 @@ const PNPM_LEGACY_BUILD_KEYS = [
   "ignoredBuiltDependencies",
   "ignoreDepScripts",
 ] as const;
-
-const PYTHON_LEGACY_MANAGERS: ReadonlySet<string> = new Set([
-  "poetry",
-  "pip",
-  "pipenv",
-]);
 
 const BUN_AUTO_SCRIPT_VALUES: ReadonlySet<string> = new Set([
   "auto",
@@ -81,23 +65,15 @@ const YARN_BERRY_PATTERN =
 const AGE_UNIT_PATTERN =
   /^(?<amount>\d+(?:\.\d+)?)\s*(?<unit>m|min|mins|minutes|h|hr|hrs|hours|d|day|days|w|week|weeks)?$/u;
 
-const STAR_PATTERN = /^\*+$/u;
-
 const NPMRC_LINE_BREAK = /\r?\n/u;
 
-const defaultReadFile = (path: string): string | null => {
-  try {
-    return readFileSync(path, "utf-8");
-  } catch {
-    return null;
-  }
-};
+const DEFAULT_REGISTRY = "https://registry.npmjs.org/";
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+const MINUTES_PER_DAY = 24 * 60;
 
-const hasText = (value: unknown): boolean =>
-  typeof value === "string" && value.trim() !== "";
+const SECONDS_PER_DAY = 86_400;
+
+const MS_PER_DAY = 86_400_000;
 
 const parseNumber = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -112,9 +88,6 @@ const parseNumber = (value: unknown): number | null => {
 
 const isTruthy = (value: unknown): boolean =>
   value === true || value === "true";
-
-const isStar = (entry: unknown): boolean =>
-  typeof entry === "string" && STAR_PATTERN.test(entry.trim());
 
 /** True when an exclude list uses a bare wildcard, which voids the gate. */
 const isBlanketExclude = (value: unknown): boolean => {
@@ -184,12 +157,27 @@ const manifestField = (raw: string | null, key: string): unknown => {
   }
 };
 
+const setOp = (key: string, value: ConfigEditValue): ConfigEdit => ({
+  key,
+  op: "set",
+  value,
+});
+
+const unsetOp = (key: string): ConfigEdit => ({ key, op: "unset" });
+
+const configFix = (
+  file: string,
+  format: ConfigFormat,
+  edits: readonly ConfigEdit[]
+): SettingsFix => ({ edits, file, format });
+
 const setting = (
   code: string,
   message: string,
   severity: Severity,
   path: string,
-  manager: PackageManager
+  manager: PackageManager,
+  fix?: SettingsFix
 ): Finding => ({
   code,
   fixable: true,
@@ -198,6 +186,7 @@ const setting = (
   message,
   path,
   severity,
+  ...(fix === undefined ? {} : { fix }),
 });
 
 /**
@@ -211,7 +200,8 @@ const advice = (
   path: string,
   manager: PackageManager,
   severity: Severity = "info",
-  fixable = false
+  fixable = false,
+  fix?: SettingsFix
 ): Finding => ({
   code,
   fixable,
@@ -220,6 +210,7 @@ const advice = (
   message,
   path,
   severity,
+  ...(fix === undefined ? {} : { fix }),
 });
 
 const leftoverFinding = (manager: DetectedManager): Finding => ({
@@ -252,32 +243,85 @@ const notUsingUvFinding = (manager: DetectedManager): Finding => ({
   severity: "high",
 });
 
-const resolveSettings = (
-  policy: Policy,
-  name: PackageManager
-): ResolvedSettings => {
-  const base = PRESET_DEFAULTS[policy.preset];
-  const extra = { ...policy.overrides, ...policy.perManager[name] };
-  return {
-    auditLevel:
-      typeof extra.auditLevel === "string" ? extra.auditLevel : base.auditLevel,
-    ignoreScripts:
-      typeof extra.ignoreScripts === "boolean"
-        ? extra.ignoreScripts
-        : base.ignoreScripts,
-    minReleaseAgeDays:
-      typeof extra.minReleaseAgeDays === "number"
-        ? extra.minReleaseAgeDays
-        : base.minReleaseAgeDays,
-    requireLockfile:
-      typeof extra.requireLockfile === "boolean"
-        ? extra.requireLockfile
-        : base.requireLockfile,
-    requirePmPin:
-      typeof extra.requirePmPin === "boolean"
-        ? extra.requirePmPin
-        : base.requirePmPin,
+const joinRoot = (root: string, name: string): string =>
+  root.endsWith("/") ? `${root}${name}` : `${root}/${name}`;
+
+const isInside = (filePath: string, root: string): boolean => {
+  const prefix = root.endsWith("/") ? root : `${root}/`;
+  return filePath === root || filePath.startsWith(prefix);
+};
+
+const profileWritePath = (
+  project: Project,
+  manager: PackageManager
+): string | null => {
+  const name = profileFor(manager).writeConfigName;
+  return name === null ? null : joinRoot(project.root, name);
+};
+
+const cargoDuration = (days: number): string => {
+  if (days % 7 === 0) {
+    return `${days / 7}w`;
+  }
+  return `${days}d`;
+};
+
+const uvExcludeNewerValue = (days: number): string =>
+  new Date(Date.now() - days * MS_PER_DAY).toISOString();
+
+const presentLegacyBuildKeys = (
+  yaml: Record<string, unknown>
+): (typeof PNPM_LEGACY_BUILD_KEYS)[number][] =>
+  PNPM_LEGACY_BUILD_KEYS.filter((key) => yaml[key] !== undefined);
+
+const migratedAllowBuilds = (
+  yaml: Record<string, unknown>
+): Record<string, unknown> => {
+  const allowBuilds: Record<string, unknown> = isPlainObject(yaml.allowBuilds)
+    ? { ...yaml.allowBuilds }
+    : {};
+  const merge = (list: unknown, allowed: boolean): void => {
+    if (!Array.isArray(list)) {
+      return;
+    }
+    for (const name of list) {
+      if (typeof name === "string" && allowBuilds[name] === undefined) {
+        allowBuilds[name] = allowed;
+      }
+    }
   };
+  merge(yaml.onlyBuiltDependencies, true);
+  merge(yaml.neverBuiltDependencies, false);
+  merge(yaml.ignoredBuiltDependencies, false);
+  return allowBuilds;
+};
+
+const pnpmBuildEdits = (yaml: Record<string, unknown>): ConfigEdit[] => [
+  setOp("dangerouslyAllowAllBuilds", false),
+  ...presentLegacyBuildKeys(yaml).map((key) => unsetOp(key)),
+  setOp("allowBuilds", migratedAllowBuilds(yaml)),
+];
+
+const dropBlanketEntries = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(
+    (entry): entry is string => typeof entry === "string" && !isStar(entry)
+  );
+};
+
+const dropBlanketObject = (
+  value: Record<string, unknown>
+): Record<string, unknown> => {
+  const kept: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (isStar(key)) {
+      continue;
+    }
+    kept[key] = child;
+  }
+  return kept;
 };
 
 const pinSeverity = (preset: PresetName): Severity =>
@@ -353,6 +397,13 @@ const lockfilePresent = (
   return readFile(path) !== null;
 };
 
+const isSeverity = (value: string): value is Severity =>
+  value === "critical" ||
+  value === "high" ||
+  value === "moderate" ||
+  value === "low" ||
+  value === "info";
+
 const auditMeetsGate = (
   auditEnabled: boolean,
   auditLevel: unknown,
@@ -362,9 +413,11 @@ const auditMeetsGate = (
     return true;
   }
   const level = typeof auditLevel === "string" ? auditLevel.toLowerCase() : "";
-  const have = AUDIT_RANK[level];
-  const need = AUDIT_RANK[gate] ?? AUDIT_RANK.high;
-  return have !== undefined && need !== undefined && have <= need;
+  if (!isSeverity(level)) {
+    return false;
+  }
+  const need = isSeverity(gate) ? gate : "high";
+  return severityAtLeast(need, level);
 };
 
 const packageManagerStartsWith = (
@@ -551,9 +604,8 @@ const bunLockfilePresent = (
   ) {
     return true;
   }
-  return (
-    readFile(`${project.root}/bun.lock`) !== null ||
-    readFile(`${project.root}/bun.lockb`) !== null
+  return profileFor("bun").lockfileNames.some(
+    (name) => readFile(`${project.root}/${name}`) !== null
   );
 };
 
@@ -561,11 +613,72 @@ const readUvConfig = (
   project: Project,
   readFile: ReadFile
 ): Record<string, unknown> => {
-  const pyproject = parseToml(readFile(`${project.root}/pyproject.toml`) ?? "");
+  const [uvTomlName, pyprojectName] = profileFor("uv").configNames;
+  const pyproject = parseToml(
+    readFile(`${project.root}/${pyprojectName ?? "pyproject.toml"}`) ?? ""
+  );
   const tool = isPlainObject(pyproject["tool"]) ? pyproject["tool"] : {};
   const toolUv = isPlainObject(tool["uv"]) ? tool["uv"] : {};
-  const uvToml = parseToml(readFile(`${project.root}/uv.toml`) ?? "");
+  const uvToml = parseToml(
+    readFile(`${project.root}/${uvTomlName ?? "uv.toml"}`) ?? ""
+  );
   return { ...toolUv, ...uvToml };
+};
+
+const hasToolUv = (raw: string): boolean => {
+  const parsed = parseToml(raw);
+  const tool = isPlainObject(parsed.tool) ? parsed.tool : {};
+  return isPlainObject(tool.uv);
+};
+
+const detectedPyprojectPath = (
+  manager: DetectedManager,
+  root: string
+): string | null => {
+  if (
+    manager.configPath !== null &&
+    isInside(manager.configPath, root) &&
+    manager.configPath.endsWith("pyproject.toml")
+  ) {
+    return manager.configPath;
+  }
+  return null;
+};
+
+const uvConfigPath = (
+  project: Project,
+  manager: DetectedManager,
+  readFile: ReadFile
+): string => {
+  const [uvTomlName, pyprojectName] = profileFor("uv").configNames;
+  const uvToml = joinRoot(project.root, uvTomlName ?? "uv.toml");
+  if (readFile(uvToml) !== null) {
+    return uvToml;
+  }
+  const fromManager = detectedPyprojectPath(manager, project.root);
+  if (fromManager !== null) {
+    return fromManager;
+  }
+  const pyproject = joinRoot(project.root, pyprojectName ?? "pyproject.toml");
+  const raw = readFile(pyproject);
+  if (raw !== null && hasToolUv(raw)) {
+    return pyproject;
+  }
+  return uvToml;
+};
+
+const uvKeyPrefix = (raw: string): string => {
+  const table = parseToml(raw);
+  if (
+    table["exclude-newer"] !== undefined ||
+    table["index-strategy"] !== undefined
+  ) {
+    return "";
+  }
+  if (isPlainObject(table.tool) || table.project !== undefined) {
+    return "tool.uv.";
+  }
+  return "";
 };
 
 /** Returns null when the value is not a timestamp and other parses apply. */
@@ -657,7 +770,8 @@ const registryUnpinnedFinding = (
   message: string,
   preset: PresetName,
   path: string,
-  manager: PackageManager
+  manager: PackageManager,
+  fix?: SettingsFix
 ): Finding[] =>
   pinned
     ? []
@@ -667,7 +781,8 @@ const registryUnpinnedFinding = (
           message,
           pinSeverity(preset),
           path,
-          manager
+          manager,
+          fix
         ),
       ];
 
@@ -675,10 +790,11 @@ const blanketExcludeFinding = (
   value: unknown,
   message: string,
   path: string,
-  manager: PackageManager
+  manager: PackageManager,
+  fix?: SettingsFix
 ): Finding[] =>
   isBlanketExclude(value)
-    ? [setting("min-age.exclude-all", message, "high", path, manager)]
+    ? [setting("min-age.exclude-all", message, "high", path, manager, fix)]
     : [];
 
 // An enforced package.json allowScripts policy is a valid, more precise
@@ -689,7 +805,8 @@ const npmScriptEnforcementFinding = (
   scriptsIgnored: boolean,
   allowScripts: boolean,
   strictAllowScripts: boolean,
-  npmrcPath: string
+  npmrcPath: string,
+  file: string
 ): Finding[] => {
   if (
     settings.ignoreScripts &&
@@ -702,7 +819,8 @@ const npmScriptEnforcementFinding = (
         "npm ignore-scripts must be true, or allowScripts with strict-allow-scripts",
         "high",
         npmrcPath,
-        "npm"
+        "npm",
+        configFix(file, "npmrc", [setOp("ignore-scripts", true)])
       ),
     ];
   }
@@ -745,11 +863,13 @@ const npmScriptPinFinding = (
   settings: ResolvedSettings,
   npmrc: Record<string, string>,
   npmrcPath: string,
-  preset: PresetName
+  preset: PresetName,
+  file: string
 ): Finding[] => {
   if (!settings.ignoreScripts || npmrc["allow-scripts-pin"] === "true") {
     return [];
   }
+  const pinFix = configFix(file, "npmrc", [setOp("allow-scripts-pin", true)]);
   if (npmrc["allow-scripts-pin"] === "false") {
     return [
       setting(
@@ -757,7 +877,8 @@ const npmScriptPinFinding = (
         "allow-scripts-pin must be true",
         "high",
         npmrcPath,
-        "npm"
+        "npm",
+        pinFix
       ),
     ];
   }
@@ -768,7 +889,8 @@ const npmScriptPinFinding = (
       npmrcPath,
       "npm",
       defaultRelianceSeverity(preset),
-      true
+      true,
+      pinFix
     ),
   ];
 };
@@ -776,7 +898,8 @@ const npmScriptPinFinding = (
 const npmScriptBypassFinding = (
   settings: ResolvedSettings,
   npmrc: Record<string, string>,
-  npmrcPath: string
+  npmrcPath: string,
+  file: string
 ): Finding[] => {
   if (
     !settings.ignoreScripts ||
@@ -790,7 +913,8 @@ const npmScriptBypassFinding = (
       "dangerously-allow-all-scripts must not be true",
       "high",
       npmrcPath,
-      "npm"
+      "npm",
+      configFix(file, "npmrc", [setOp("dangerously-allow-all-scripts", false)])
     ),
   ];
 };
@@ -800,7 +924,8 @@ const npmScriptsFindings = (
   npmrc: Record<string, string>,
   manifestRaw: string | null,
   npmrcPath: string,
-  preset: PresetName
+  preset: PresetName,
+  file: string
 ): Finding[] => {
   const scriptsIgnored = npmrc["ignore-scripts"] === "true";
   const allowScripts = isPlainObject(
@@ -813,7 +938,8 @@ const npmScriptsFindings = (
       scriptsIgnored,
       allowScripts,
       strictAllowScripts,
-      npmrcPath
+      npmrcPath,
+      file
     ),
     ...npmScriptAdviceFindings(
       settings,
@@ -822,15 +948,16 @@ const npmScriptsFindings = (
       strictAllowScripts,
       npmrcPath
     ),
-    ...npmScriptPinFinding(settings, npmrc, npmrcPath, preset),
-    ...npmScriptBypassFinding(settings, npmrc, npmrcPath),
+    ...npmScriptPinFinding(settings, npmrc, npmrcPath, preset, file),
+    ...npmScriptBypassFinding(settings, npmrc, npmrcPath, file),
   ];
 };
 
 const npmSourceFinding = (
   settings: ResolvedSettings,
   npmrc: Record<string, string>,
-  npmrcPath: string
+  npmrcPath: string,
+  file: string
 ): Finding[] => {
   if (settings.ignoreScripts && npmrcAllowsNonRegistry(npmrc)) {
     return [
@@ -839,7 +966,13 @@ const npmSourceFinding = (
         "allow-git, allow-remote, allow-file, and allow-directory must not be set to all",
         "high",
         npmrcPath,
-        "npm"
+        "npm",
+        configFix(file, "npmrc", [
+          setOp("allow-directory", "none"),
+          setOp("allow-file", "none"),
+          setOp("allow-git", "none"),
+          setOp("allow-remote", "none"),
+        ])
       ),
     ];
   }
@@ -849,7 +982,8 @@ const npmSourceFinding = (
 const npmAuditFinding = (
   npmrc: Record<string, string>,
   settings: ResolvedSettings,
-  npmrcPath: string
+  npmrcPath: string,
+  file: string
 ): Finding[] => {
   if (
     auditMeetsGate(
@@ -866,7 +1000,11 @@ const npmAuditFinding = (
       "npm audit must be enabled at the preset gate",
       "high",
       npmrcPath,
-      "npm"
+      "npm",
+      configFix(file, "npmrc", [
+        setOp("audit", true),
+        setOp("audit-level", settings.auditLevel),
+      ])
     ),
   ];
 };
@@ -874,7 +1012,8 @@ const npmAuditFinding = (
 const npmMinAgeFinding = (
   settings: ResolvedSettings,
   npmrc: Record<string, string>,
-  npmrcPath: string
+  npmrcPath: string,
+  file: string
 ): Finding[] => {
   if (settings.minReleaseAgeDays <= 0) {
     return [];
@@ -889,14 +1028,20 @@ const npmMinAgeFinding = (
       `min-release-age must be at least ${settings.minReleaseAgeDays} days`,
       "high",
       npmrcPath,
-      "npm"
+      "npm",
+      configFix(file, "npmrc", [
+        setOp("min-release-age", String(settings.minReleaseAgeDays)),
+      ])
     ),
   ];
 };
 
 const auditNpm: ManagerAuditor = (project, manager, policy, readFile) => {
   const settings = resolveSettings(policy, "npm");
-  const npmrcPath = manager.configPath ?? `${project.root}/.npmrc`;
+  const npmrcPath =
+    manager.configPath ??
+    `${project.root}/${profileFor("npm").configNames[0] ?? ".npmrc"}`;
+  const file = profileWritePath(project, "npm") ?? npmrcPath;
   const npmrc = parseNpmrc(readFile(npmrcPath) ?? "");
   const manifestRaw = readFile(manager.manifestPath);
   return [
@@ -905,9 +1050,10 @@ const auditNpm: ManagerAuditor = (project, manager, policy, readFile) => {
       npmrc,
       manifestRaw,
       npmrcPath,
-      policy.preset
+      policy.preset,
+      file
     ),
-    ...npmSourceFinding(settings, npmrc, npmrcPath),
+    ...npmSourceFinding(settings, npmrc, npmrcPath, file),
     ...lockfileMissingFinding(
       settings.requireLockfile,
       lockfilePresent(manager, readFile, `${project.root}/package-lock.json`),
@@ -915,14 +1061,15 @@ const auditNpm: ManagerAuditor = (project, manager, policy, readFile) => {
       "package-lock.json is required",
       "npm"
     ),
-    ...npmAuditFinding(npmrc, settings, npmrcPath),
-    ...npmMinAgeFinding(settings, npmrc, npmrcPath),
+    ...npmAuditFinding(npmrc, settings, npmrcPath, file),
+    ...npmMinAgeFinding(settings, npmrc, npmrcPath, file),
     ...registryUnpinnedFinding(
       hasText(npmrc["registry"]),
       "registry must be set in .npmrc",
       policy.preset,
       npmrcPath,
-      "npm"
+      "npm",
+      configFix(file, "npmrc", [setOp("registry", DEFAULT_REGISTRY)])
     ),
     ...pmPinFinding(
       settings.requirePmPin,
@@ -938,36 +1085,44 @@ const auditNpm: ManagerAuditor = (project, manager, policy, readFile) => {
 const pnpmDefaultBuildsFinding = (
   preset: PresetName,
   yamlPath: string,
-  buildsBlockedByDefault: boolean
-): Finding =>
-  buildsBlockedByDefault
+  buildsBlockedByDefault: boolean,
+  file: string,
+  yaml: Record<string, unknown>
+): Finding => {
+  const fix = configFix(file, "yaml", pnpmBuildEdits(yaml));
+  return buildsBlockedByDefault
     ? advice(
         "scripts.unrestricted",
         "pnpm blocks dependency builds by default; declare allowBuilds to review them explicitly",
         yamlPath,
         "pnpm",
         defaultRelianceSeverity(preset),
-        true
+        true,
+        fix
       )
     : setting(
         "scripts.unrestricted",
         "pnpm builds must be restricted",
         "high",
         yamlPath,
-        "pnpm"
+        "pnpm",
+        fix
       );
+};
 
 const pnpmBuildsFindings = (
   yaml: Record<string, unknown>,
   yamlPath: string,
   policy: Policy,
   usesAllowBuilds: boolean,
-  buildsBlockedByDefault: boolean
+  buildsBlockedByDefault: boolean,
+  file: string
 ): Finding[] => {
   const hasAllowBuilds = isPlainObject(yaml["allowBuilds"]);
   const legacy = PNPM_LEGACY_BUILD_KEYS.filter(
     (key) => yaml[key] !== undefined
   );
+  const buildFix = configFix(file, "yaml", pnpmBuildEdits(yaml));
   if (yaml["dangerouslyAllowAllBuilds"] === true) {
     return [
       setting(
@@ -975,7 +1130,8 @@ const pnpmBuildsFindings = (
         "pnpm dangerouslyAllowAllBuilds must not be true",
         "high",
         yamlPath,
-        "pnpm"
+        "pnpm",
+        buildFix
       ),
     ];
   }
@@ -986,13 +1142,20 @@ const pnpmBuildsFindings = (
         `pnpm 11 removed ${legacy.join(", ")}; use allowBuilds instead`,
         "high",
         yamlPath,
-        "pnpm"
+        "pnpm",
+        buildFix
       ),
     ];
   }
   if (!hasAllowBuilds && legacy.length === 0) {
     return [
-      pnpmDefaultBuildsFinding(policy.preset, yamlPath, buildsBlockedByDefault),
+      pnpmDefaultBuildsFinding(
+        policy.preset,
+        yamlPath,
+        buildsBlockedByDefault,
+        file,
+        yaml
+      ),
     ];
   }
   return [];
@@ -1004,7 +1167,8 @@ const pnpmScriptsFindings = (
   yamlPath: string,
   policy: Policy,
   usesAllowBuilds: boolean,
-  buildsBlockedByDefault: boolean
+  buildsBlockedByDefault: boolean,
+  file: string
 ): Finding[] => {
   if (!settings.ignoreScripts) {
     return [];
@@ -1014,7 +1178,8 @@ const pnpmScriptsFindings = (
     yamlPath,
     policy,
     usesAllowBuilds,
-    buildsBlockedByDefault
+    buildsBlockedByDefault,
+    file
   );
   if (yaml["strictDepBuilds"] === false) {
     findings.push(
@@ -1023,7 +1188,8 @@ const pnpmScriptsFindings = (
         "pnpm strictDepBuilds must not be false",
         "high",
         yamlPath,
-        "pnpm"
+        "pnpm",
+        configFix(file, "yaml", [setOp("strictDepBuilds", true)])
       )
     );
   }
@@ -1032,7 +1198,8 @@ const pnpmScriptsFindings = (
 
 const pnpmExoticFinding = (
   yaml: Record<string, unknown>,
-  yamlPath: string
+  yamlPath: string,
+  file: string
 ): Finding[] => {
   if (yaml["blockExoticSubdeps"] === false) {
     return [
@@ -1041,7 +1208,8 @@ const pnpmExoticFinding = (
         "pnpm blockExoticSubdeps must not be false",
         "high",
         yamlPath,
-        "pnpm"
+        "pnpm",
+        configFix(file, "yaml", [setOp("blockExoticSubdeps", true)])
       ),
     ];
   }
@@ -1051,7 +1219,8 @@ const pnpmExoticFinding = (
 const pnpmAuditFinding = (
   yaml: Record<string, unknown>,
   settings: ResolvedSettings,
-  yamlPath: string
+  yamlPath: string,
+  file: string
 ): Finding[] => {
   if (
     auditMeetsGate(
@@ -1068,7 +1237,11 @@ const pnpmAuditFinding = (
       "pnpm audit must be enabled at the preset gate",
       "high",
       yamlPath,
-      "pnpm"
+      "pnpm",
+      configFix(file, "yaml", [
+        setOp("audit", true),
+        setOp("auditLevel", settings.auditLevel),
+      ])
     ),
   ];
 };
@@ -1077,7 +1250,8 @@ const pnpmMinAgeGateFinding = (
   settings: ResolvedSettings,
   yaml: Record<string, unknown>,
   yamlPath: string,
-  usesAllowBuilds: boolean
+  usesAllowBuilds: boolean,
+  file: string
 ): Finding[] => {
   const raw = yaml["minimumReleaseAge"];
   // pnpm 11 ships minimumReleaseAge=1440 (24h) on by default.
@@ -1093,7 +1267,13 @@ const pnpmMinAgeGateFinding = (
       `minimumReleaseAge must be at least ${requiredHours * 60} minutes`,
       "high",
       yamlPath,
-      "pnpm"
+      "pnpm",
+      configFix(file, "yaml", [
+        setOp(
+          "minimumReleaseAge",
+          settings.minReleaseAgeDays * MINUTES_PER_DAY
+        ),
+      ])
     ),
   ];
 };
@@ -1102,7 +1282,8 @@ const pnpmMinAgeGateFinding = (
 // explicitly; false lets pnpm fall back to a version that fails the gate.
 const pnpmMinAgeStrictFinding = (
   yaml: Record<string, unknown>,
-  yamlPath: string
+  yamlPath: string,
+  file: string
 ): Finding[] => {
   if (yaml["minimumReleaseAgeStrict"] === false) {
     return [
@@ -1111,7 +1292,8 @@ const pnpmMinAgeStrictFinding = (
         "pnpm minimumReleaseAgeStrict must not be false",
         "high",
         yamlPath,
-        "pnpm"
+        "pnpm",
+        configFix(file, "yaml", [setOp("minimumReleaseAgeStrict", true)])
       ),
     ];
   }
@@ -1121,7 +1303,8 @@ const pnpmMinAgeStrictFinding = (
 const pnpmMissingTimeFinding = (
   policy: Policy,
   yaml: Record<string, unknown>,
-  yamlPath: string
+  yamlPath: string,
+  file: string
 ): Finding[] => {
   if (
     policy.preset === "strict" &&
@@ -1133,7 +1316,10 @@ const pnpmMissingTimeFinding = (
         "minimumReleaseAgeIgnoreMissingTime must be false to fail closed",
         "moderate",
         yamlPath,
-        "pnpm"
+        "pnpm",
+        configFix(file, "yaml", [
+          setOp("minimumReleaseAgeIgnoreMissingTime", false),
+        ])
       ),
     ];
   }
@@ -1143,7 +1329,8 @@ const pnpmMissingTimeFinding = (
 const pnpmTrustPolicyFinding = (
   yaml: Record<string, unknown>,
   yamlPath: string,
-  version: ManagerVersion | null
+  version: ManagerVersion | null,
+  file: string
 ): Finding[] => {
   if (!atLeastOrUnknown(version, 10, 21)) {
     return [];
@@ -1158,14 +1345,16 @@ const pnpmTrustPolicyFinding = (
       "pnpm trustPolicy must be no-downgrade",
       "high",
       yamlPath,
-      "pnpm"
+      "pnpm",
+      configFix(file, "yaml", [setOp("trustPolicy", "no-downgrade")])
     ),
   ];
 };
 
 const pnpmTrustLockfileFinding = (
   yaml: Record<string, unknown>,
-  yamlPath: string
+  yamlPath: string,
+  file: string
 ): Finding[] => {
   const trustLockfile = yaml["trustLockfile"] ?? yaml["trust-lockfile"];
   if (isTruthy(trustLockfile)) {
@@ -1175,7 +1364,8 @@ const pnpmTrustLockfileFinding = (
         "pnpm trustLockfile must not be true",
         "high",
         yamlPath,
-        "pnpm"
+        "pnpm",
+        configFix(file, "yaml", [setOp("trustLockfile", false)])
       ),
     ];
   }
@@ -1185,7 +1375,8 @@ const pnpmTrustLockfileFinding = (
 const pnpmVerifyDepsFinding = (
   yaml: Record<string, unknown>,
   yamlPath: string,
-  version: ManagerVersion | null
+  version: ManagerVersion | null,
+  file: string
 ): Finding[] => {
   if (!atLeastOrUnknown(version, 10, 12)) {
     return [];
@@ -1200,7 +1391,8 @@ const pnpmVerifyDepsFinding = (
       "pnpm verifyDepsBeforeRun must be error",
       "high",
       yamlPath,
-      "pnpm"
+      "pnpm",
+      configFix(file, "yaml", [setOp("verifyDepsBeforeRun", "error")])
     ),
   ];
 };
@@ -1210,27 +1402,35 @@ const pnpmMinAgeFindings = (
   yaml: Record<string, unknown>,
   yamlPath: string,
   policy: Policy,
-  usesAllowBuilds: boolean
+  usesAllowBuilds: boolean,
+  file: string
 ): Finding[] => {
   if (settings.minReleaseAgeDays <= 0) {
     return [];
   }
   return [
-    ...pnpmMinAgeGateFinding(settings, yaml, yamlPath, usesAllowBuilds),
-    ...pnpmMinAgeStrictFinding(yaml, yamlPath),
+    ...pnpmMinAgeGateFinding(settings, yaml, yamlPath, usesAllowBuilds, file),
+    ...pnpmMinAgeStrictFinding(yaml, yamlPath, file),
     ...blanketExcludeFinding(
       yaml["minimumReleaseAgeExclude"],
       "minimumReleaseAgeExclude must not exempt every package",
       yamlPath,
-      "pnpm"
+      "pnpm",
+      configFix(file, "yaml", [
+        setOp(
+          "minimumReleaseAgeExclude",
+          dropBlanketEntries(yaml["minimumReleaseAgeExclude"])
+        ),
+      ])
     ),
-    ...pnpmMissingTimeFinding(policy, yaml, yamlPath),
+    ...pnpmMissingTimeFinding(policy, yaml, yamlPath, file),
   ];
 };
 
 const auditPnpm: ManagerAuditor = (project, manager, policy, readFile) => {
   const settings = resolveSettings(policy, "pnpm");
   const yamlPath = manager.configPath ?? `${project.root}/pnpm-workspace.yaml`;
+  const file = profileWritePath(project, "pnpm") ?? yamlPath;
   const yaml = parseYaml(readFile(yamlPath) ?? "");
   const version = managerVersion(readFile(manager.manifestPath), "pnpm");
   // pnpm >= 10 blocks dependency builds by default; pnpm >= 11 replaced the
@@ -1245,28 +1445,42 @@ const auditPnpm: ManagerAuditor = (project, manager, policy, readFile) => {
       yamlPath,
       policy,
       usesAllowBuilds,
-      buildsBlockedByDefault
+      buildsBlockedByDefault,
+      file
     ),
-    ...pnpmExoticFinding(yaml, yamlPath),
+    ...pnpmExoticFinding(yaml, yamlPath, file),
     ...lockfileMissingFinding(
       settings.requireLockfile,
       !lockfileOff &&
-        lockfilePresent(manager, readFile, `${project.root}/pnpm-lock.yaml`),
-      manager.lockfilePath ?? `${project.root}/pnpm-lock.yaml`,
+        lockfilePresent(
+          manager,
+          readFile,
+          `${project.root}/${profileFor("pnpm").lockfileNames[0] ?? "pnpm-lock.yaml"}`
+        ),
+      manager.lockfilePath ??
+        `${project.root}/${profileFor("pnpm").lockfileNames[0] ?? "pnpm-lock.yaml"}`,
       "pnpm-lock.yaml is required",
       "pnpm"
     ),
-    ...pnpmAuditFinding(yaml, settings, yamlPath),
-    ...pnpmMinAgeFindings(settings, yaml, yamlPath, policy, usesAllowBuilds),
-    ...pnpmTrustPolicyFinding(yaml, yamlPath, version),
-    ...pnpmTrustLockfileFinding(yaml, yamlPath),
-    ...pnpmVerifyDepsFinding(yaml, yamlPath, version),
+    ...pnpmAuditFinding(yaml, settings, yamlPath, file),
+    ...pnpmMinAgeFindings(
+      settings,
+      yaml,
+      yamlPath,
+      policy,
+      usesAllowBuilds,
+      file
+    ),
+    ...pnpmTrustPolicyFinding(yaml, yamlPath, version, file),
+    ...pnpmTrustLockfileFinding(yaml, yamlPath, file),
+    ...pnpmVerifyDepsFinding(yaml, yamlPath, version, file),
     ...registryUnpinnedFinding(
       pnpmRegistryPinned(yaml),
       "registry or registries.default must be set",
       policy.preset,
       yamlPath,
-      "pnpm"
+      "pnpm",
+      configFix(file, "yaml", [setOp("registry", DEFAULT_REGISTRY)])
     ),
     ...pmPinFinding(
       settings.requirePmPin,
@@ -1284,11 +1498,13 @@ const yarnScriptsFinding = (
   yarnrc: Record<string, unknown>,
   yarnrcPath: string,
   policy: Policy,
-  scriptsOffByDefault: boolean
+  scriptsOffByDefault: boolean,
+  file: string
 ): Finding[] => {
   if (!settings.ignoreScripts || yarnrc["enableScripts"] === false) {
     return [];
   }
+  const fix = configFix(file, "yaml", [setOp("enableScripts", false)]);
   if (yarnrc["enableScripts"] === true || !scriptsOffByDefault) {
     return [
       setting(
@@ -1296,7 +1512,8 @@ const yarnScriptsFinding = (
         "yarn enableScripts must be false",
         "high",
         yarnrcPath,
-        "yarn"
+        "yarn",
+        fix
       ),
     ];
   }
@@ -1307,7 +1524,8 @@ const yarnScriptsFinding = (
       yarnrcPath,
       "yarn",
       defaultRelianceSeverity(policy.preset),
-      true
+      true,
+      fix
     ),
   ];
 };
@@ -1316,7 +1534,8 @@ const yarnMinAgeGateFinding = (
   settings: ResolvedSettings,
   yarnrc: Record<string, unknown>,
   yarnrcPath: string,
-  ageGateByDefault: boolean
+  ageGateByDefault: boolean,
+  file: string
 ): Finding[] => {
   const raw = yarnrc["npmMinimalAgeGate"];
   const defaultHours = ageGateByDefault ? 24 * 7 : 0;
@@ -1331,7 +1550,13 @@ const yarnMinAgeGateFinding = (
       `npmMinimalAgeGate must be at least ${requiredHours * 60} minutes`,
       "high",
       yarnrcPath,
-      "yarn"
+      "yarn",
+      configFix(file, "yaml", [
+        setOp(
+          "npmMinimalAgeGate",
+          settings.minReleaseAgeDays * MINUTES_PER_DAY
+        ),
+      ])
     ),
   ];
 };
@@ -1340,25 +1565,39 @@ const yarnMinAgeFindings = (
   settings: ResolvedSettings,
   yarnrc: Record<string, unknown>,
   yarnrcPath: string,
-  ageGateByDefault: boolean
+  ageGateByDefault: boolean,
+  file: string
 ): Finding[] => {
   if (settings.minReleaseAgeDays <= 0) {
     return [];
   }
   return [
-    ...yarnMinAgeGateFinding(settings, yarnrc, yarnrcPath, ageGateByDefault),
+    ...yarnMinAgeGateFinding(
+      settings,
+      yarnrc,
+      yarnrcPath,
+      ageGateByDefault,
+      file
+    ),
     ...blanketExcludeFinding(
       yarnrc["npmPreapprovedPackages"],
       "npmPreapprovedPackages must not exempt every package",
       yarnrcPath,
-      "yarn"
+      "yarn",
+      configFix(file, "yaml", [
+        setOp(
+          "npmPreapprovedPackages",
+          dropBlanketEntries(yarnrc["npmPreapprovedPackages"])
+        ),
+      ])
     ),
   ];
 };
 
 const yarnIntegrityFindings = (
   yarnrc: Record<string, unknown>,
-  yarnrcPath: string
+  yarnrcPath: string,
+  file: string
 ): Finding[] => {
   const findings: Finding[] = [];
   if (
@@ -1371,7 +1610,8 @@ const yarnIntegrityFindings = (
         'yarn checksumBehavior must be "throw"',
         "high",
         yarnrcPath,
-        "yarn"
+        "yarn",
+        configFix(file, "yaml", [setOp("checksumBehavior", "throw")])
       )
     );
   }
@@ -1382,7 +1622,8 @@ const yarnIntegrityFindings = (
         "yarn enableStrictSsl must not be false",
         "high",
         yarnrcPath,
-        "yarn"
+        "yarn",
+        configFix(file, "yaml", [setOp("enableStrictSsl", true)])
       )
     );
   }
@@ -1393,16 +1634,30 @@ const yarnIntegrityFindings = (
         "yarn enableHardenedMode must not be false",
         "moderate",
         yarnrcPath,
-        "yarn"
+        "yarn",
+        configFix(file, "yaml", [setOp("enableHardenedMode", true)])
       )
     );
   }
   return findings;
 };
 
+const yarnAuditEdits = (yarnrc: Record<string, unknown>): ConfigEdit[] => {
+  const edits: ConfigEdit[] = [];
+  if (yarnrc.audit !== undefined) {
+    edits.push(unsetOp("audit"));
+  }
+  if (yarnrc.npmAudit !== undefined) {
+    edits.push(unsetOp("npmAudit"));
+  }
+  edits.push(setOp("enableNpmAudit", true));
+  return edits;
+};
+
 const yarnAuditFinding = (
   yarnrc: Record<string, unknown>,
-  yarnrcPath: string
+  yarnrcPath: string,
+  file: string
 ): Finding[] => {
   if (yarnAuditDisabled(yarnrc)) {
     return [
@@ -1411,7 +1666,8 @@ const yarnAuditFinding = (
         "yarn audit must not be disabled",
         "high",
         yarnrcPath,
-        "yarn"
+        "yarn",
+        configFix(file, "yaml", yarnAuditEdits(yarnrc))
       ),
     ];
   }
@@ -1422,7 +1678,8 @@ const yarnGitSourceFinding = (
   settings: ResolvedSettings,
   yarnrc: Record<string, unknown>,
   yarnrcPath: string,
-  gitBlockingSupported: boolean
+  gitBlockingSupported: boolean,
+  file: string
 ): Finding[] => {
   if (!settings.ignoreScripts) {
     return [];
@@ -1435,13 +1692,21 @@ const yarnGitSourceFinding = (
       ? "yarn approvedGitRepositories must block git-sourced dependencies"
       : "yarn approvedGitRepositories must not allow every git repository";
   return [
-    setting("source.git-unrestricted", message, "high", yarnrcPath, "yarn"),
+    setting(
+      "source.git-unrestricted",
+      message,
+      "high",
+      yarnrcPath,
+      "yarn",
+      configFix(file, "yaml", [setOp("approvedGitRepositories", [])])
+    ),
   ];
 };
 
 const auditYarn: ManagerAuditor = (project, manager, policy, readFile) => {
   const settings = resolveSettings(policy, "yarn");
   const yarnrcPath = manager.configPath ?? `${project.root}/.yarnrc.yml`;
+  const file = profileWritePath(project, "yarn") ?? yarnrcPath;
   const yarnrc = parseYaml(readFile(yarnrcPath) ?? "");
   const version = managerVersion(readFile(manager.manifestPath), "yarn");
   // Yarn stopped running dependency postinstalls by default in 4.14, and
@@ -1456,11 +1721,18 @@ const auditYarn: ManagerAuditor = (project, manager, policy, readFile) => {
       yarnrc,
       yarnrcPath,
       policy,
-      scriptsOffByDefault
+      scriptsOffByDefault,
+      file
     ),
-    ...yarnMinAgeFindings(settings, yarnrc, yarnrcPath, ageGateByDefault),
-    ...yarnIntegrityFindings(yarnrc, yarnrcPath),
-    ...yarnGitSourceFinding(settings, yarnrc, yarnrcPath, gitBlockingSupported),
+    ...yarnMinAgeFindings(settings, yarnrc, yarnrcPath, ageGateByDefault, file),
+    ...yarnIntegrityFindings(yarnrc, yarnrcPath, file),
+    ...yarnGitSourceFinding(
+      settings,
+      yarnrc,
+      yarnrcPath,
+      gitBlockingSupported,
+      file
+    ),
     ...lockfileMissingFinding(
       settings.requireLockfile,
       lockfilePresent(manager, readFile, `${project.root}/yarn.lock`),
@@ -1468,13 +1740,14 @@ const auditYarn: ManagerAuditor = (project, manager, policy, readFile) => {
       "yarn.lock is required",
       "yarn"
     ),
-    ...yarnAuditFinding(yarnrc, yarnrcPath),
+    ...yarnAuditFinding(yarnrc, yarnrcPath, file),
     ...registryUnpinnedFinding(
       hasText(yarnrc["npmRegistryServer"]),
       "npmRegistryServer must be set",
       policy.preset,
       yarnrcPath,
-      "yarn"
+      "yarn",
+      configFix(file, "yaml", [setOp("npmRegistryServer", DEFAULT_REGISTRY)])
     ),
     ...pmPinFinding(
       settings.requirePmPin,
@@ -1491,7 +1764,8 @@ const bunScriptsFinding = (
   settings: ResolvedSettings,
   bunfig: Record<string, unknown>,
   install: Record<string, unknown>,
-  bunfigPath: string
+  bunfigPath: string,
+  file: string
 ): Finding[] => {
   if (settings.ignoreScripts && bunScriptsUnrestricted(bunfig, install)) {
     return [
@@ -1500,7 +1774,8 @@ const bunScriptsFinding = (
         "bun scripts must be restricted",
         "high",
         bunfigPath,
-        "bun"
+        "bun",
+        configFix(file, "toml", [setOp("install.ignoreScripts", true)])
       ),
     ];
   }
@@ -1510,11 +1785,12 @@ const bunScriptsFinding = (
 const bunMinAgeGateFinding = (
   settings: ResolvedSettings,
   install: Record<string, unknown>,
-  bunfigPath: string
+  bunfigPath: string,
+  file: string
 ): Finding[] => {
   // bun expresses minimumReleaseAge in SECONDS and ships it off by default.
   const seconds = parseNumber(install["minimumReleaseAge"]);
-  const requiredSeconds = settings.minReleaseAgeDays * 86_400;
+  const requiredSeconds = settings.minReleaseAgeDays * SECONDS_PER_DAY;
   if (seconds !== null && seconds >= requiredSeconds) {
     return [];
   }
@@ -1524,7 +1800,10 @@ const bunMinAgeGateFinding = (
       `install.minimumReleaseAge must be at least ${requiredSeconds} seconds`,
       "high",
       bunfigPath,
-      "bun"
+      "bun",
+      configFix(file, "toml", [
+        setOp("install.minimumReleaseAge", requiredSeconds),
+      ])
     ),
   ];
 };
@@ -1532,18 +1811,25 @@ const bunMinAgeGateFinding = (
 const bunMinAgeFindings = (
   settings: ResolvedSettings,
   install: Record<string, unknown>,
-  bunfigPath: string
+  bunfigPath: string,
+  file: string
 ): Finding[] => {
   if (settings.minReleaseAgeDays <= 0) {
     return [];
   }
   return [
-    ...bunMinAgeGateFinding(settings, install, bunfigPath),
+    ...bunMinAgeGateFinding(settings, install, bunfigPath, file),
     ...blanketExcludeFinding(
       install["minimumReleaseAgeExcludes"],
       "minimumReleaseAgeExcludes must not exempt every package",
       bunfigPath,
-      "bun"
+      "bun",
+      configFix(file, "toml", [
+        setOp(
+          "install.minimumReleaseAgeExcludes",
+          dropBlanketEntries(install["minimumReleaseAgeExcludes"])
+        ),
+      ])
     ),
   ];
 };
@@ -1551,10 +1837,11 @@ const bunMinAgeFindings = (
 const auditBun: ManagerAuditor = (project, manager, policy, readFile) => {
   const settings = resolveSettings(policy, "bun");
   const bunfigPath = manager.configPath ?? `${project.root}/bunfig.toml`;
+  const file = profileWritePath(project, "bun") ?? bunfigPath;
   const bunfig = parseToml(readFile(bunfigPath) ?? "");
   const install = isPlainObject(bunfig["install"]) ? bunfig["install"] : {};
   return [
-    ...bunScriptsFinding(settings, bunfig, install, bunfigPath),
+    ...bunScriptsFinding(settings, bunfig, install, bunfigPath, file),
     ...lockfileMissingFinding(
       settings.requireLockfile,
       bunLockfilePresent(project, manager, readFile),
@@ -1562,13 +1849,14 @@ const auditBun: ManagerAuditor = (project, manager, policy, readFile) => {
       "bun.lock or bun.lockb is required",
       "bun"
     ),
-    ...bunMinAgeFindings(settings, install, bunfigPath),
+    ...bunMinAgeFindings(settings, install, bunfigPath, file),
     ...registryUnpinnedFinding(
       bunRegistryPinned(install),
       "install.registry must be set",
       policy.preset,
       bunfigPath,
-      "bun"
+      "bun",
+      configFix(file, "toml", [setOp("install.registry", DEFAULT_REGISTRY)])
     ),
   ];
 };
@@ -1576,7 +1864,9 @@ const auditBun: ManagerAuditor = (project, manager, policy, readFile) => {
 const uvExcludeNewerFinding = (
   settings: ResolvedSettings,
   cfg: Record<string, unknown>,
-  configPath: string
+  configPath: string,
+  file: string,
+  prefix: string
 ): Finding[] => {
   if (uvExcludeNewerMeets(cfg["exclude-newer"], settings.minReleaseAgeDays)) {
     return [];
@@ -1587,7 +1877,13 @@ const uvExcludeNewerFinding = (
       `exclude-newer must meet ${settings.minReleaseAgeDays} days`,
       "high",
       configPath,
-      "uv"
+      "uv",
+      configFix(file, "toml", [
+        setOp(
+          `${prefix}exclude-newer`,
+          uvExcludeNewerValue(settings.minReleaseAgeDays)
+        ),
+      ])
     ),
   ];
 };
@@ -1595,18 +1891,26 @@ const uvExcludeNewerFinding = (
 const uvMinAgeFindings = (
   settings: ResolvedSettings,
   cfg: Record<string, unknown>,
-  configPath: string
+  configPath: string,
+  file: string,
+  prefix: string
 ): Finding[] => {
   if (settings.minReleaseAgeDays <= 0) {
     return [];
   }
+  const excludePkg = isPlainObject(cfg["exclude-newer-package"])
+    ? dropBlanketObject(cfg["exclude-newer-package"])
+    : {};
   return [
-    ...uvExcludeNewerFinding(settings, cfg, configPath),
+    ...uvExcludeNewerFinding(settings, cfg, configPath, file, prefix),
     ...blanketExcludeFinding(
       cfg["exclude-newer-package"],
       "exclude-newer-package must not exempt every package",
       configPath,
-      "uv"
+      "uv",
+      configFix(file, "toml", [
+        setOp(`${prefix}exclude-newer-package`, excludePkg),
+      ])
     ),
   ];
 };
@@ -1614,7 +1918,9 @@ const uvMinAgeFindings = (
 const uvIndexStrategyFinding = (
   policy: Policy,
   cfg: Record<string, unknown>,
-  configPath: string
+  configPath: string,
+  file: string,
+  prefix: string
 ): Finding[] => {
   if (
     policy.preset === "strict" &&
@@ -1627,7 +1933,10 @@ const uvIndexStrategyFinding = (
         'extra indexes require index-strategy = "first-index"',
         pinSeverity(policy.preset),
         configPath,
-        "uv"
+        "uv",
+        configFix(file, "toml", [
+          setOp(`${prefix}index-strategy`, "first-index"),
+        ])
       ),
     ];
   }
@@ -1637,7 +1946,9 @@ const uvIndexStrategyFinding = (
 const uvMalwareFinding = (
   cfg: Record<string, unknown>,
   configPath: string,
-  manifestRaw: string | null
+  manifestRaw: string | null,
+  file: string,
+  prefix: string
 ): Finding[] => {
   const version = managerVersion(manifestRaw, "uv");
   if (!atLeastPatchOrUnknown(version, 0, 11, 31)) {
@@ -1652,7 +1963,8 @@ const uvMalwareFinding = (
       "uv audit malware-check must be true",
       "high",
       configPath,
-      "uv"
+      "uv",
+      configFix(file, "toml", [setOp(`${prefix}audit.malware-check`, true)])
     ),
   ];
 };
@@ -1661,6 +1973,8 @@ const auditUv: ManagerAuditor = (project, manager, policy, readFile) => {
   const settings = resolveSettings(policy, "uv");
   const cfg = readUvConfig(project, readFile);
   const configPath = manager.configPath ?? `${project.root}/pyproject.toml`;
+  const file = uvConfigPath(project, manager, readFile);
+  const prefix = uvKeyPrefix(readFile(file) ?? "");
   const manifestRaw = readFile(manager.manifestPath);
   return [
     ...lockfileMissingFinding(
@@ -1670,9 +1984,9 @@ const auditUv: ManagerAuditor = (project, manager, policy, readFile) => {
       "uv.lock is required",
       "uv"
     ),
-    ...uvMinAgeFindings(settings, cfg, configPath),
-    ...uvIndexStrategyFinding(policy, cfg, configPath),
-    ...uvMalwareFinding(cfg, configPath, manifestRaw),
+    ...uvMinAgeFindings(settings, cfg, configPath, file, prefix),
+    ...uvIndexStrategyFinding(policy, cfg, configPath, file, prefix),
+    ...uvMalwareFinding(cfg, configPath, manifestRaw, file, prefix),
   ];
 };
 
@@ -1680,9 +1994,10 @@ const readCargoConfig = (
   project: Project,
   readFile: ReadFile
 ): Record<string, unknown> => {
-  const configToml = readFile(`${project.root}/.cargo/config.toml`);
-  const config = readFile(`${project.root}/.cargo/config`);
-  const raw = configToml ?? config ?? "";
+  const raw =
+    profileFor("cargo")
+      .configNames.map((name) => readFile(`${project.root}/${name}`))
+      .find((contents) => contents !== null) ?? "";
   return parseToml(raw);
 };
 
@@ -1700,7 +2015,8 @@ const cargoMinAgeMeets = (value: unknown, minDays: number): boolean => {
 const cargoMinAgeFinding = (
   settings: ResolvedSettings,
   install: Record<string, unknown>,
-  configPath: string
+  configPath: string,
+  file: string
 ): Finding[] => {
   if (
     cargoMinAgeMeets(install["minimum-release-age"], settings.minReleaseAgeDays)
@@ -1713,7 +2029,13 @@ const cargoMinAgeFinding = (
       `install.minimum-release-age must meet ${settings.minReleaseAgeDays} days`,
       "high",
       configPath,
-      "cargo"
+      "cargo",
+      configFix(file, "toml", [
+        setOp(
+          "install.minimum-release-age",
+          cargoDuration(settings.minReleaseAgeDays)
+        ),
+      ])
     ),
   ];
 };
@@ -1721,12 +2043,13 @@ const cargoMinAgeFinding = (
 const cargoMinAgeFindings = (
   settings: ResolvedSettings,
   install: Record<string, unknown>,
-  configPath: string
+  configPath: string,
+  file: string
 ): Finding[] => {
   if (settings.minReleaseAgeDays <= 0) {
     return [];
   }
-  return cargoMinAgeFinding(settings, install, configPath);
+  return cargoMinAgeFinding(settings, install, configPath, file);
 };
 
 const auditCargo: ManagerAuditor = (project, manager, policy, readFile) => {
@@ -1734,6 +2057,8 @@ const auditCargo: ManagerAuditor = (project, manager, policy, readFile) => {
   const cfg = readCargoConfig(project, readFile);
   const install = isPlainObject(cfg["install"]) ? cfg["install"] : {};
   const configPath = manager.configPath ?? `${project.root}/.cargo/config.toml`;
+  const file =
+    manager.configPath ?? profileWritePath(project, "cargo") ?? configPath;
   return [
     ...lockfileMissingFinding(
       settings.requireLockfile,
@@ -1742,14 +2067,15 @@ const auditCargo: ManagerAuditor = (project, manager, policy, readFile) => {
       "Cargo.lock is required",
       "cargo"
     ),
-    ...cargoMinAgeFindings(settings, install, configPath),
+    ...cargoMinAgeFindings(settings, install, configPath, file),
   ];
 };
 
 const bundlerMinAgeFinding = (
   settings: ResolvedSettings,
   config: Record<string, string>,
-  configPath: string
+  configPath: string,
+  file: string
 ): Finding[] => {
   if (settings.minReleaseAgeDays <= 0) {
     return [];
@@ -1764,7 +2090,10 @@ const bundlerMinAgeFinding = (
       `BUNDLE_COOLDOWN must be at least ${settings.minReleaseAgeDays} days`,
       "high",
       configPath,
-      "bundler"
+      "bundler",
+      configFix(file, "bundle-config", [
+        setOp("BUNDLE_COOLDOWN", String(settings.minReleaseAgeDays)),
+      ])
     ),
   ];
 };
@@ -1772,7 +2101,8 @@ const bundlerMinAgeFinding = (
 const composerScriptsFinding = (
   settings: ResolvedSettings,
   allowPlugins: unknown,
-  configPath: string
+  configPath: string,
+  file: string
 ): Finding[] => {
   if (!settings.ignoreScripts || allowPlugins !== true) {
     return [];
@@ -1783,7 +2113,8 @@ const composerScriptsFinding = (
       "composer allow-plugins must not be true",
       "high",
       configPath,
-      "composer"
+      "composer",
+      configFix(file, "json", [setOp("config.allow-plugins", false)])
     ),
   ];
 };
@@ -1791,18 +2122,25 @@ const composerScriptsFinding = (
 const composerTlsFinding = (
   disableTls: boolean,
   secureHttp: boolean,
-  configPath: string
+  configPath: string,
+  file: string
 ): Finding[] => {
   if (!disableTls && secureHttp) {
     return [];
   }
+  const edits: ConfigEdit[] = [];
+  if (disableTls) {
+    edits.push(unsetOp("config.disable-tls"));
+  }
+  edits.push(setOp("config.secure-http", true));
   return [
     setting(
       "registry.unpinned",
       "composer must keep secure-http enabled and disable-tls off",
       "high",
       configPath,
-      "composer"
+      "composer",
+      configFix(file, "json", edits)
     ),
   ];
 };
@@ -1828,7 +2166,8 @@ const composerHttpRepoFinding = (
 
 const composerPolicyFindings = (
   security: ReturnType<typeof readComposerSecurity>,
-  configPath: string
+  configPath: string,
+  file: string
 ): Finding[] => {
   const findings: Finding[] = [];
   if (security.policyDisabled || security.advisoriesAudit === "ignore") {
@@ -1838,7 +2177,12 @@ const composerPolicyFindings = (
         "composer policy.advisories.audit must not be ignore",
         "high",
         configPath,
-        "composer"
+        "composer",
+        configFix(file, "json", [
+          setOp("config.policy.advisories.audit", "fail"),
+          setOp("config.policy.advisories.block", true),
+          setOp("config.policy.malware.block", true),
+        ])
       )
     );
   }
@@ -1849,7 +2193,8 @@ const composerPolicyFindings = (
         "composer policy.advisories.block must be true",
         "high",
         configPath,
-        "composer"
+        "composer",
+        configFix(file, "json", [setOp("config.policy.advisories.block", true)])
       )
     );
   }
@@ -1860,7 +2205,8 @@ const composerPolicyFindings = (
         "composer policy.malware.block must be true",
         "high",
         configPath,
-        "composer"
+        "composer",
+        configFix(file, "json", [setOp("config.policy.malware.block", true)])
       )
     );
   }
@@ -1870,7 +2216,8 @@ const composerPolicyFindings = (
 const composerSourceFallbackFinding = (
   sourceFallback: boolean,
   preset: PresetName,
-  configPath: string
+  configPath: string,
+  file: string
 ): Finding[] => {
   if (!sourceFallback) {
     return [];
@@ -1881,7 +2228,8 @@ const composerSourceFallbackFinding = (
       "composer source-fallback must not be true",
       pinSeverity(preset),
       configPath,
-      "composer"
+      "composer",
+      configFix(file, "json", [setOp("config.source-fallback", false)])
     ),
   ];
 };
@@ -1889,6 +2237,7 @@ const composerSourceFallbackFinding = (
 const auditComposer: ManagerAuditor = (project, manager, policy, readFile) => {
   const settings = resolveSettings(policy, "composer");
   const configPath = manager.configPath ?? `${project.root}/composer.json`;
+  const file = profileWritePath(project, "composer") ?? configPath;
   const manifest = parseComposerManifest(readFile(configPath) ?? "") ?? {};
   const security = readComposerSecurity(manifest);
   return [
@@ -1899,18 +2248,29 @@ const auditComposer: ManagerAuditor = (project, manager, policy, readFile) => {
       "composer.lock is required",
       "composer"
     ),
-    ...composerScriptsFinding(settings, security.allowPlugins, configPath),
-    ...composerTlsFinding(security.disableTls, security.secureHttp, configPath),
+    ...composerScriptsFinding(
+      settings,
+      security.allowPlugins,
+      configPath,
+      file
+    ),
+    ...composerTlsFinding(
+      security.disableTls,
+      security.secureHttp,
+      configPath,
+      file
+    ),
     ...composerHttpRepoFinding(
       security.httpRepoUrls,
       policy.preset,
       configPath
     ),
-    ...composerPolicyFindings(security, configPath),
+    ...composerPolicyFindings(security, configPath, file),
     ...composerSourceFallbackFinding(
       security.sourceFallback,
       policy.preset,
-      configPath
+      configPath,
+      file
     ),
   ];
 };
@@ -1918,6 +2278,7 @@ const auditComposer: ManagerAuditor = (project, manager, policy, readFile) => {
 const auditBundler: ManagerAuditor = (project, manager, policy, readFile) => {
   const settings = resolveSettings(policy, "bundler");
   const configPath = manager.configPath ?? `${project.root}/.bundle/config`;
+  const file = profileWritePath(project, "bundler") ?? configPath;
   const config = parseBundleConfig(readFile(configPath) ?? "");
   return [
     ...lockfileMissingFinding(
@@ -1927,7 +2288,7 @@ const auditBundler: ManagerAuditor = (project, manager, policy, readFile) => {
       "Gemfile.lock is required",
       "bundler"
     ),
-    ...bundlerMinAgeFinding(settings, config, configPath),
+    ...bundlerMinAgeFinding(settings, config, configPath, file),
   ];
 };
 
@@ -1958,7 +2319,7 @@ const primaryFindings = (
   policy: Policy,
   readFile: ReadFile
 ): Finding[] => {
-  if (PYTHON_LEGACY_MANAGERS.has(manager.name)) {
+  if (profileFor(manager.name).kind === "python-legacy") {
     return [notUsingUvFinding(manager)];
   }
   if (!policy.enabledManagers.includes(manager.name)) {
@@ -1989,9 +2350,9 @@ const managerFindings = (
 export const auditSettings = (
   project: Project,
   policy: Policy,
-  opts?: SettingsFs
+  opts: SettingsFs
 ): Finding[] => {
-  const readFile = opts?.readFile ?? defaultReadFile;
+  const { readFile } = opts;
   return project.managers.flatMap((manager) =>
     managerFindings(project, manager, policy, readFile)
   );

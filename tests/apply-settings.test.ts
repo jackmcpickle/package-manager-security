@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 
 import { applySettings } from "../src/apply-settings";
 import { auditPath } from "../src/audit";
-import type { Finding, Project } from "../src/domain";
+import type { Finding, Project, SettingsFix } from "../src/domain";
+import { createMemoryCache } from "../src/memory-cache";
 import { loadPolicy } from "../src/policy";
 import { auditSettings } from "../src/settings";
 
@@ -201,12 +202,10 @@ test("auditPath maps apply skipped dirty to exit 2", async () => {
     "/p/package.json": `{"name":"x"}`,
   };
   const result = await auditPath("/p", {
-    apply: true,
-    applyAdvisories: false,
-    commit: false,
     concurrency: 4,
     deps: {
-      gitStatus: () => "dirty",
+      cache: createMemoryCache(),
+      digest: (bytes) => bytes,
       isDir: (p) => p === "/p" || p === "/p/.git",
       readDir: (dir) => {
         if (dir === "/p") {
@@ -217,13 +216,22 @@ test("auditPath maps apply skipped dirty to exit 2", async () => {
       readFile: (p) => files[p] ?? null,
       run: () => ({ code: 0, stderr: "", stdout: `{"advisories":{}}` }),
       which: () => "/usr/bin/npm",
-      writeFile: () => {
-        throw new Error("must not write");
+    },
+    layers: {},
+    mode: {
+      advisories: false,
+      allowMajors: false,
+      kind: "apply",
+      settings: true,
+      write: {
+        commit: false,
+        force: false,
+        gitStatus: () => "dirty",
+        writeFile: () => {
+          throw new Error("must not write");
+        },
       },
     },
-    force: false,
-    interactive: false,
-    policy: loadPolicy({}),
   });
   expect(result.exitCode).toBe(2);
 });
@@ -235,12 +243,10 @@ test("auditPath apply on a clean tree writes settings and is not the stub exit 2
     "/p/package.json": `{"name":"x"}`,
   };
   const result = await auditPath("/p", {
-    apply: true,
-    applyAdvisories: false,
-    commit: false,
     concurrency: 4,
     deps: {
-      gitStatus: () => "clean",
+      cache: createMemoryCache(),
+      digest: (bytes) => bytes,
       isDir: (p) => p === "/p" || p === "/p/.git",
       readDir: (dir) => {
         if (dir === "/p") {
@@ -251,13 +257,22 @@ test("auditPath apply on a clean tree writes settings and is not the stub exit 2
       readFile: (p) => files[p] ?? null,
       run: () => ({ code: 0, stderr: "", stdout: `{"advisories":{}}` }),
       which: () => "/usr/bin/npm",
-      writeFile: (p, b) => {
-        files[p] = b;
+    },
+    layers: {},
+    mode: {
+      advisories: false,
+      allowMajors: false,
+      kind: "apply",
+      settings: true,
+      write: {
+        commit: false,
+        force: false,
+        gitStatus: () => "clean",
+        writeFile: (p, b) => {
+          files[p] = b;
+        },
       },
     },
-    force: false,
-    interactive: false,
-    policy: loadPolicy({}),
   });
   expect(files["/p/.npmrc"]).toContain("ignore-scripts=true");
   expect(result.exitCode).not.toBe(2);
@@ -275,16 +290,10 @@ test("two npm/pnpm roots sharing a gitRoot both get written without force", asyn
   let tree: "clean" | "dirty" = "clean";
   const commits: { root: string; files: string[] }[] = [];
   const result = await auditPath("/repo", {
-    apply: true,
-    applyAdvisories: false,
-    commit: true,
     concurrency: 4,
     deps: {
-      gitCommit: (root, _message, written) => {
-        commits.push({ files: written, root });
-        return true;
-      },
-      gitStatus: () => tree,
+      cache: createMemoryCache(),
+      digest: (bytes) => bytes,
       isDir: (p) =>
         p === "/repo" ||
         p === "/repo/.git" ||
@@ -305,14 +314,27 @@ test("two npm/pnpm roots sharing a gitRoot both get written without force", asyn
       readFile: (p) => files[p] ?? null,
       run: () => ({ code: 0, stderr: "", stdout: `{"advisories":{}}` }),
       which: () => "/usr/bin/npm",
-      writeFile: (p, b) => {
-        files[p] = b;
-        tree = "dirty";
+    },
+    layers: {},
+    mode: {
+      advisories: false,
+      allowMajors: false,
+      kind: "apply",
+      settings: true,
+      write: {
+        commit: true,
+        force: false,
+        gitCommit: (root, _message, written) => {
+          commits.push({ files: written, root });
+          return true;
+        },
+        gitStatus: () => tree,
+        writeFile: (p, b) => {
+          files[p] = b;
+          tree = "dirty";
+        },
       },
     },
-    force: false,
-    interactive: false,
-    policy: loadPolicy({}),
   });
   expect(files["/repo/a/.npmrc"]).toContain("ignore-scripts=true");
   expect(files["/repo/b/pnpm-workspace.yaml"]).toContain("allowBuilds: {}");
@@ -890,12 +912,10 @@ test("auditPath without --apply never writes", async () => {
     "/p/package.json": `{"name":"x"}`,
   };
   const result = await auditPath("/p", {
-    apply: false,
-    applyAdvisories: false,
-    commit: false,
     concurrency: 4,
     deps: {
-      gitStatus: () => "clean",
+      cache: createMemoryCache(),
+      digest: (bytes) => bytes,
       isDir: (p) => p === "/p" || p === "/p/.git",
       readDir: (dir) => {
         if (dir === "/p") {
@@ -906,13 +926,9 @@ test("auditPath without --apply never writes", async () => {
       readFile: (p) => files[p] ?? null,
       run: () => ({ code: 0, stderr: "", stdout: `{"advisories":{}}` }),
       which: () => "/usr/bin/npm",
-      writeFile: () => {
-        throw new Error("audit must not write");
-      },
     },
-    force: false,
-    interactive: false,
-    policy: loadPolicy({}),
+    layers: {},
+    mode: { kind: "audit" },
   });
   expect(files["/p/.npmrc"]).toBe(`registry=https://registry.npmjs.org/\n`);
   expect(result.exitCode).toBe(1);
@@ -1010,4 +1026,157 @@ test("apply updates existing .bundle/config preserving other keys", () => {
   });
   expect(files["/r/.bundle/config"]).toContain('BUNDLE_COOLDOWN: "1"');
   expect(files["/r/.bundle/config"]).toContain('BUNDLE_PATH: "vendor/bundle"');
+});
+
+const applyFix = (
+  files: Record<string, string>,
+  fix: SettingsFix,
+  root = "/p"
+): Record<string, string> => {
+  const project: Project = {
+    gitRoot: root,
+    managers: [],
+    root,
+  };
+  const finding: Finding = {
+    code: "synthetic.fix",
+    fix,
+    fixable: true,
+    kind: "settings",
+    message: "synthetic fix",
+    path: fix.file,
+    severity: "high",
+  };
+  applySettings(project, [finding], loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  return files;
+};
+
+test("synthetic npmrc fix writes ignore-scripts like a real npm finding", () => {
+  const files: Record<string, string> = {
+    "/p/.npmrc": "registry=https://registry.npmjs.org/\n",
+  };
+  applyFix(files, {
+    edits: [{ key: "ignore-scripts", op: "set", value: true }],
+    file: "/p/.npmrc",
+    format: "npmrc",
+  });
+  expect(files["/p/.npmrc"]).toContain("ignore-scripts=true");
+  expect(files["/p/.npmrc"]).toContain("registry=https://registry.npmjs.org/");
+});
+
+test("synthetic yaml fix writes pnpm minimumReleaseAge as 1440 minutes", () => {
+  const files: Record<string, string> = {
+    "/p/pnpm-workspace.yaml": "packages:\n  - '.'\n",
+  };
+  applyFix(files, {
+    edits: [{ key: "minimumReleaseAge", op: "set", value: 1440 }],
+    file: "/p/pnpm-workspace.yaml",
+    format: "yaml",
+  });
+  expect(files["/p/pnpm-workspace.yaml"]).toContain("minimumReleaseAge: 1440");
+  expect(files["/p/pnpm-workspace.yaml"]).toContain("packages:");
+});
+
+test("synthetic toml fix writes bun ignoreScripts and minimumReleaseAge seconds", () => {
+  const files: Record<string, string> = {
+    "/p/bunfig.toml": '[install]\nregistry = "https://registry.npmjs.org/"\n',
+  };
+  applyFix(files, {
+    edits: [
+      { key: "install.ignoreScripts", op: "set", value: true },
+      { key: "install.minimumReleaseAge", op: "set", value: 86_400 },
+    ],
+    file: "/p/bunfig.toml",
+    format: "toml",
+  });
+  expect(files["/p/bunfig.toml"]).toContain("ignoreScripts = true");
+  expect(files["/p/bunfig.toml"]).toContain("minimumReleaseAge = 86400");
+  expect(files["/p/bunfig.toml"]).toContain(
+    'registry = "https://registry.npmjs.org/"'
+  );
+});
+
+test("synthetic bundle-config fix writes BUNDLE_COOLDOWN days", () => {
+  const files: Record<string, string> = {
+    "/r/.bundle/config": '---\nBUNDLE_PATH: "vendor/bundle"\n',
+  };
+  applyFix(
+    files,
+    {
+      edits: [{ key: "BUNDLE_COOLDOWN", op: "set", value: "1" }],
+      file: "/r/.bundle/config",
+      format: "bundle-config",
+    },
+    "/r"
+  );
+  expect(files["/r/.bundle/config"]).toContain('BUNDLE_COOLDOWN: "1"');
+  expect(files["/r/.bundle/config"]).toContain('BUNDLE_PATH: "vendor/bundle"');
+});
+
+test("synthetic json fix writes composer allow-plugins false with 4-space JSON", () => {
+  const files: Record<string, string> = {
+    "/p/composer.json": `${JSON.stringify(
+      {
+        config: { "allow-plugins": true, "sort-packages": true },
+        name: "acme/app",
+        require: { php: "^8.3" },
+      },
+      null,
+      4
+    )}\n`,
+  };
+  applyFix(files, {
+    edits: [{ key: "config.allow-plugins", op: "set", value: false }],
+    file: "/p/composer.json",
+    format: "json",
+  });
+  expect(files["/p/composer.json"]).toBe(
+    `${JSON.stringify(
+      {
+        config: { "allow-plugins": false, "sort-packages": true },
+        name: "acme/app",
+        require: { php: "^8.3" },
+      },
+      null,
+      4
+    )}\n`
+  );
+});
+
+test("a finding without fix is never written", () => {
+  const files: Record<string, string> = {
+    "/p/.npmrc": "registry=https://registry.npmjs.org/\n",
+    "/p/package-lock.json": "{}",
+    "/p/package.json": '{"name":"x"}',
+  };
+  const project = npmProject("/p");
+  const finding: Finding = {
+    code: "scripts.unrestricted",
+    fixable: true,
+    kind: "settings",
+    manager: "npm",
+    message: "npm ignore-scripts must be true",
+    path: "/p/.npmrc",
+    severity: "high",
+  };
+  const result = applySettings(project, [finding], loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  expect(files["/p/.npmrc"]).toBe("registry=https://registry.npmjs.org/\n");
+  expect(result.written).toEqual([]);
+  expect(result.skipped).toBe("nothing");
 });

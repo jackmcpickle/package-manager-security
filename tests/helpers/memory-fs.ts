@@ -1,6 +1,9 @@
 import path from "node:path";
 
+import { bunFiles } from "../../src/bun-host";
 import type { DiscoverFs } from "../../src/discover";
+import type { Host, HostFiles } from "../../src/host";
+import { createMemoryCache } from "../../src/memory-cache";
 
 const addAncestors = (dirs: Set<string>, dir: string): void => {
   let current = dir;
@@ -45,12 +48,70 @@ const childNames = (entries: string[], dir: string): string[] => {
 export const memoryFs = (
   files: Record<string, string>,
   extraDirs: string[] = []
-): Required<DiscoverFs> => {
+): DiscoverFs => {
   const dirs = collectDirs(files, extraDirs);
   const entries = [...dirs, ...Object.keys(files)];
   return {
     isDir: (filePath: string): boolean => dirs.has(filePath),
     readDir: (dir: string): string[] => childNames(entries, dir),
     readFile: (filePath: string): string | null => files[filePath] ?? null,
+  };
+};
+
+const memoryHostFiles = (
+  files: Record<string, string>,
+  extraDirs: string[] = []
+): HostFiles => {
+  const fs = memoryFs(files, extraDirs);
+  return {
+    ...fs,
+    writeFile: (filePath: string, content: string): void => {
+      files[filePath] = content;
+    },
+  };
+};
+
+const notStubbed =
+  (name: string): (() => never) =>
+  () => {
+    throw new Error(`${name} not stubbed`);
+  };
+
+const discardHostOutput = (_text: string): void => {
+  void _text;
+};
+
+export type FakeHostOverrides = Partial<Omit<Host, "files">> & {
+  extraDirs?: string[];
+  files?: Partial<HostFiles>;
+  fsMap?: Record<string, string>;
+};
+
+export const fakeHost = (overrides: FakeHostOverrides = {}): Host => {
+  const {
+    extraDirs,
+    fsMap,
+    files: filesOverride,
+    ...hostOverrides
+  } = overrides;
+  const baseFiles =
+    fsMap === undefined ? bunFiles : memoryHostFiles(fsMap, extraDirs ?? []);
+  return {
+    createCache: () => createMemoryCache(),
+    cwd: () => "/",
+    digest: (bytes) => bytes,
+    env: {},
+    files: { ...baseFiles, ...filesOverride },
+    gitCommit: () => true,
+    gitStatus: () => "clean",
+    isTTY: false,
+    now: () => 0,
+    readStdinChunk: () => Promise.resolve(null),
+    run: notStubbed("run"),
+    runOsv: () => Promise.resolve([]),
+    stderr: discardHostOutput,
+    stdout: discardHostOutput,
+    which: notStubbed("which"),
+    ...hostOverrides,
   };
 };

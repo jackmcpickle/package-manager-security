@@ -1,4 +1,3 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { parse as parseToml } from "smol-toml";
@@ -9,11 +8,16 @@ import type {
   PackageManager,
   Project,
 } from "./domain";
+import { profileFor } from "./managers/profile";
+import { isPlainObject } from "./std";
+
+const isPlainTable = (value: unknown): value is Record<string, unknown> =>
+  isPlainObject(value) && !(value instanceof Date);
 
 export interface DiscoverFs {
-  readDir?: (dir: string) => string[];
-  readFile?: (path: string) => string | null;
-  isDir?: (path: string) => boolean;
+  readDir: (dir: string) => string[];
+  readFile: (path: string) => string | null;
+  isDir: (path: string) => boolean;
 }
 
 const SKIP_DIRS = new Set([
@@ -44,12 +48,6 @@ interface Fs {
   isDir: (path: string) => boolean;
 }
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" &&
-  value !== null &&
-  !Array.isArray(value) &&
-  !(value instanceof Date);
-
 const isJsManager = (name: string): name is PackageManager =>
   name === "npm" || name === "pnpm" || name === "yarn" || name === "bun";
 
@@ -68,34 +66,10 @@ const hasRequirementsTxt = (names: Set<string>): boolean => {
   return false;
 };
 
-const defaultReadDir = (dir: string): string[] => {
-  try {
-    return readdirSync(dir);
-  } catch {
-    return [];
-  }
-};
-
-const defaultReadFile = (filePath: string): string | null => {
-  try {
-    return readFileSync(filePath, "utf-8");
-  } catch {
-    return null;
-  }
-};
-
-const defaultIsDir = (dir: string): boolean => {
-  try {
-    return statSync(dir).isDirectory();
-  } catch {
-    return false;
-  }
-};
-
-const resolveFs = (opts?: DiscoverFs): Fs => ({
-  isDir: opts?.isDir ?? defaultIsDir,
-  readDir: opts?.readDir ?? defaultReadDir,
-  readFile: opts?.readFile ?? defaultReadFile,
+const resolveFs = (opts: DiscoverFs): Fs => ({
+  isDir: opts.isDir,
+  readDir: opts.readDir,
+  readFile: opts.readFile,
 });
 
 const readPyproject = (dir: string, fs: Fs): Record<string, unknown> | null => {
@@ -105,7 +79,7 @@ const readPyproject = (dir: string, fs: Fs): Record<string, unknown> | null => {
   }
   try {
     const parsed: unknown = parseToml(raw);
-    return isPlainObject(parsed) ? parsed : null;
+    return isPlainTable(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -117,7 +91,7 @@ const hasToolTable = (dir: string, fs: Fs, name: string): boolean => {
     return false;
   }
   const { tool } = pyproject;
-  return isPlainObject(tool) && isPlainObject(tool[name]);
+  return isPlainTable(tool) && isPlainTable(tool[name]);
 };
 
 const hasToolUv = (dir: string, fs: Fs): boolean => hasToolTable(dir, fs, "uv");
@@ -127,7 +101,7 @@ const hasToolPoetry = (dir: string, fs: Fs): boolean =>
 
 const hasProjectTable = (dir: string, fs: Fs): boolean => {
   const pyproject = readPyproject(dir, fs);
-  return pyproject !== null && isPlainObject(pyproject["project"]);
+  return pyproject !== null && isPlainTable(pyproject["project"]);
 };
 
 const ROOT_PM_FILES = [
@@ -284,7 +258,7 @@ const readPackageJson = (
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    return isPlainObject(parsed) ? parsed : null;
+    return isPlainTable(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -453,11 +427,10 @@ const hasBunMarker = (names: Set<string>): boolean =>
   hasBunLock(names) || names.has("bunfig.toml");
 
 const bunLockfilePath = (dir: string, names: Set<string>): string | null => {
-  if (names.has("bun.lock")) {
-    return path.join(dir, "bun.lock");
-  }
-  if (names.has("bun.lockb")) {
-    return path.join(dir, "bun.lockb");
+  for (const name of profileFor("bun").lockfileNames) {
+    if (names.has(name)) {
+      return path.join(dir, name);
+    }
   }
   return null;
 };
@@ -634,11 +607,12 @@ const uvDetectedConfigPath = (
   names: Set<string>,
   toolUv: boolean
 ): string | null => {
-  if (names.has("uv.toml")) {
-    return path.join(dir, "uv.toml");
+  const [uvTomlName, pyprojectName] = profileFor("uv").configNames;
+  if (uvTomlName !== undefined && names.has(uvTomlName)) {
+    return path.join(dir, uvTomlName);
   }
-  if (toolUv) {
-    return path.join(dir, "pyproject.toml");
+  if (toolUv && pyprojectName !== undefined) {
+    return path.join(dir, pyprojectName);
   }
   return null;
 };
@@ -664,15 +638,16 @@ const detectUv = (
 };
 
 const cargoConfigPath = (dir: string, fs: Fs): string => {
-  const configToml = path.join(dir, ".cargo/config.toml");
-  const config = path.join(dir, ".cargo/config");
-  if (fs.readFile(configToml) !== null) {
+  const [configToml, config] = profileFor("cargo").configNames.map((name) =>
+    path.join(dir, name)
+  );
+  if (configToml !== undefined && fs.readFile(configToml) !== null) {
     return configToml;
   }
-  if (fs.readFile(config) !== null) {
+  if (config !== undefined && fs.readFile(config) !== null) {
     return config;
   }
-  return configToml;
+  return configToml ?? path.join(dir, ".cargo/config.toml");
 };
 
 const detectComposer = (
@@ -754,10 +729,7 @@ const detectManagers = (dir: string, fs: Fs): DetectedManager[] => {
   return managers;
 };
 
-export const discoverProjects = (
-  root: string,
-  opts?: DiscoverFs
-): Project[] => {
+export const discoverProjects = (root: string, opts: DiscoverFs): Project[] => {
   const fs = resolveFs(opts);
   const repos = findRepoTrees(root, fs);
   const projects: Project[] = [];

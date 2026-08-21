@@ -1,3 +1,5 @@
+import { isPlainObject } from "./std";
+
 export type ComposerAuditMode = "ignore" | "report" | "fail";
 
 export interface ComposerSecurity {
@@ -11,9 +13,6 @@ export interface ComposerSecurity {
   malwareBlock: boolean;
   httpRepoUrls: string[];
 }
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const asObject = (value: unknown): Record<string, unknown> =>
   isPlainObject(value) ? value : {};

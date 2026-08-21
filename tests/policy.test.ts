@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { loadPolicy } from "../src/policy";
+import { loadPolicy, policyForRepo, resolveSettings } from "../src/policy";
 
 test("defaults to standard preset when no config given", () => {
   const policy = loadPolicy({});
@@ -128,4 +128,73 @@ ignoreScripts = false
   expect(policy.perManager.pip).toBeUndefined();
   expect(policy.perManager.pipenv).toBeUndefined();
   expect(policy.perManager.pnpm?.ignoreScripts).toBe(false);
+});
+
+test("policyForRepo: repo beats scan beats user for preset", () => {
+  const layers = {
+    scanToml: `preset = "standard"\n`,
+    userToml: `preset = "relaxed"\n`,
+  };
+  expect(policyForRepo(layers).preset).toBe("standard");
+  expect(policyForRepo(layers, `preset = "strict"\n`).preset).toBe("strict");
+});
+
+test("policyForRepo: repo beats scan beats user for a per-manager table key", () => {
+  const layers = {
+    scanToml: `[pnpm]\nminReleaseAgeDays = 7\n`,
+    userToml: `[pnpm]\nminReleaseAgeDays = 1\n`,
+  };
+  expect(policyForRepo(layers).perManager.pnpm?.minReleaseAgeDays).toBe(7);
+  expect(
+    policyForRepo(layers, `[pnpm]\nminReleaseAgeDays = 14\n`).perManager.pnpm
+      ?.minReleaseAgeDays
+  ).toBe(14);
+});
+
+test("policyForRepo: flags beat repo for preset and a per-manager table key", () => {
+  const layers = {
+    flags: {
+      overrides: { ignoreScripts: true },
+      preset: "relaxed" as const,
+    },
+  };
+  const policy = policyForRepo(
+    layers,
+    `preset = "strict"\n[pnpm]\nignoreScripts = false\n`
+  );
+  expect(policy.preset).toBe("relaxed");
+  expect(policy.perManager.pnpm?.ignoreScripts).toBe(true);
+});
+
+test("resolveSettings falls back to preset defaults when override types do not match", () => {
+  const policy = loadPolicy({
+    flags: {
+      overrides: {
+        auditLevel: 1,
+        ignoreScripts: "yes",
+        minReleaseAgeDays: "7",
+        requireLockfile: 1,
+        requirePmPin: "true",
+      },
+    },
+  });
+  expect(resolveSettings(policy, "npm")).toEqual({
+    auditLevel: "high",
+    ignoreScripts: true,
+    minReleaseAgeDays: 1,
+    requireLockfile: true,
+    requirePmPin: true,
+  });
+});
+
+test("resolveSettings uses a typed per-manager value over the global override", () => {
+  const policy = loadPolicy({
+    repoToml: `
+ignoreScripts = true
+[pnpm]
+ignoreScripts = false
+`,
+  });
+  expect(resolveSettings(policy, "pnpm").ignoreScripts).toBe(false);
+  expect(resolveSettings(policy, "npm").ignoreScripts).toBe(true);
 });

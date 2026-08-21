@@ -140,6 +140,42 @@ test("format json and markdown include finding codes", () => {
   expect(md).toContain("scripts.unrestricted");
 });
 
+test("formatJson omits finding.fix from the serialized report", () => {
+  const result: AuditResult = {
+    exitCode: 1,
+    projects: [
+      {
+        findings: [
+          {
+            code: "scripts.unrestricted",
+            fix: {
+              edits: [{ key: "ignore-scripts", op: "set", value: true }],
+              file: "/p/.npmrc",
+              format: "npmrc",
+            },
+            fixable: true,
+            kind: "settings",
+            manager: "npm",
+            message: "npm ignore-scripts must be true",
+            path: "/p/.npmrc",
+            severity: "high",
+          },
+        ],
+        project: { gitRoot: "/p", managers: [], root: "/p" },
+      },
+    ],
+    skippedDirty: [],
+  };
+  const parsed = JSON.parse(formatJson(result)) as {
+    projects: { findings: Record<string, unknown>[] }[];
+  };
+  const [finding] = parsed.projects[0]?.findings ?? [];
+  expect(finding).toBeDefined();
+  expect(finding).not.toHaveProperty("fix");
+  expect(finding?.code).toBe("scripts.unrestricted");
+  expect(finding?.fixable).toBe(true);
+});
+
 test("format sarif includes finding codes from the same result", () => {
   const sarif = formatSarif(sampleResult);
   expect(sarif).toContain("scripts.unrestricted");
