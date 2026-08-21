@@ -2,6 +2,7 @@ import { parse as parseTomlRaw } from "smol-toml";
 
 import { parseBundleConfig } from "./bundle-config";
 import { parseComposerManifest, readComposerSecurity } from "./composer-config";
+import { severityAtLeast } from "./domain";
 import type {
   ConfigEdit,
   ConfigEditValue,
@@ -18,6 +19,7 @@ import type {
 import { profileFor } from "./managers/profile";
 import { resolveSettings } from "./policy";
 import type { ResolvedSettings } from "./policy";
+import { hasText, isPlainObject, isStar } from "./std";
 
 export interface SettingsFs {
   readFile: (path: string) => string | null;
@@ -37,14 +39,6 @@ type ManagerAuditor = (
   policy: Policy,
   readFile: ReadFile
 ) => Finding[];
-
-const AUDIT_RANK: Record<string, number> = {
-  critical: 4,
-  high: 3,
-  info: 0,
-  low: 1,
-  moderate: 2,
-};
 
 const PNPM_LEGACY_BUILD_KEYS = [
   "onlyBuiltDependencies",
@@ -71,8 +65,6 @@ const YARN_BERRY_PATTERN =
 const AGE_UNIT_PATTERN =
   /^(?<amount>\d+(?:\.\d+)?)\s*(?<unit>m|min|mins|minutes|h|hr|hrs|hours|d|day|days|w|week|weeks)?$/u;
 
-const STAR_PATTERN = /^\*+$/u;
-
 const NPMRC_LINE_BREAK = /\r?\n/u;
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org/";
@@ -82,12 +74,6 @@ const MINUTES_PER_DAY = 24 * 60;
 const SECONDS_PER_DAY = 86_400;
 
 const MS_PER_DAY = 86_400_000;
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const hasText = (value: unknown): boolean =>
-  typeof value === "string" && value.trim() !== "";
 
 const parseNumber = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -102,9 +88,6 @@ const parseNumber = (value: unknown): number | null => {
 
 const isTruthy = (value: unknown): boolean =>
   value === true || value === "true";
-
-const isStar = (entry: unknown): boolean =>
-  typeof entry === "string" && STAR_PATTERN.test(entry.trim());
 
 /** True when an exclude list uses a bare wildcard, which voids the gate. */
 const isBlanketExclude = (value: unknown): boolean => {
@@ -420,6 +403,13 @@ const lockfilePresent = (
   return readFile(path) !== null;
 };
 
+const isSeverity = (value: string): value is Severity =>
+  value === "critical" ||
+  value === "high" ||
+  value === "moderate" ||
+  value === "low" ||
+  value === "info";
+
 const auditMeetsGate = (
   auditEnabled: boolean,
   auditLevel: unknown,
@@ -429,9 +419,11 @@ const auditMeetsGate = (
     return true;
   }
   const level = typeof auditLevel === "string" ? auditLevel.toLowerCase() : "";
-  const have = AUDIT_RANK[level];
-  const need = AUDIT_RANK[gate] ?? AUDIT_RANK.high;
-  return have !== undefined && need !== undefined && have <= need;
+  if (!isSeverity(level)) {
+    return false;
+  }
+  const need = isSeverity(gate) ? gate : "high";
+  return severityAtLeast(need, level);
 };
 
 const packageManagerStartsWith = (

@@ -2,6 +2,7 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
 import { APP_NAME } from "./app-name";
 import { parseBundleConfig, stringifyBundleConfig } from "./bundle-config";
+import { gitRootOf } from "./domain";
 import type {
   ConfigEdit,
   ConfigEditValue,
@@ -11,6 +12,7 @@ import type {
   Project,
   SettingsFix,
 } from "./domain";
+import { isPlainObject } from "./std";
 
 export interface ApplyResult {
   written: string[];
@@ -41,9 +43,6 @@ type FormatEditor = (
   raw: string,
   edits: readonly ConfigEdit[]
 ) => string | null;
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isInside = (filePath: string, root: string): boolean => {
   const prefix = root.endsWith("/") ? root : `${root}/`;
@@ -403,7 +402,7 @@ export const applySettingsGroup = (
     return emptyApply("nothing");
   }
 
-  const gitRoot = first.project.gitRoot ?? first.project.root;
+  const gitRoot = gitRootOf(first.project);
   if (isDirtyRoot(deps, gitRoot)) {
     return emptyApply("dirty");
   }

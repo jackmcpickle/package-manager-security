@@ -82,3 +82,26 @@ export interface Policy {
 }
 
 export type ExitCode = 0 | 1 | 2;
+
+const SEVERITY_RANK: Record<Severity, number> = {
+  critical: 4,
+  high: 3,
+  info: 0,
+  low: 1,
+  moderate: 2,
+};
+
+const ADVISORY_KINDS = new Set<FindingKind>([
+  "advisory",
+  "deprecated",
+  "quarantine",
+]);
+
+export const severityAtLeast = (a: Severity, b: Severity): boolean =>
+  SEVERITY_RANK[a] >= SEVERITY_RANK[b];
+
+export const isAdvisoryKind = (kind: FindingKind): boolean =>
+  ADVISORY_KINDS.has(kind);
+
+export const gitRootOf = (project: Project): string =>
+  project.gitRoot ?? project.root;

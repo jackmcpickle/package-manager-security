@@ -9,6 +9,7 @@ import type {
   Project,
 } from "./domain";
 import { profileFor } from "./managers/profile";
+import { isPlainObject } from "./std";
 
 export interface DiscoverFs {
   readDir: (dir: string) => string[];
@@ -43,12 +44,6 @@ interface Fs {
   readFile: (path: string) => string | null;
   isDir: (path: string) => boolean;
 }
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" &&
-  value !== null &&
-  !Array.isArray(value) &&
-  !(value instanceof Date);
 
 const isJsManager = (name: string): name is PackageManager =>
   name === "npm" || name === "pnpm" || name === "yarn" || name === "bun";

@@ -9,6 +9,7 @@ import type { ApplySettingsItem } from "./apply-settings";
 import type { Cache } from "./cache";
 import { CACHE_TTL_MS, createFsCache } from "./cache";
 import { discoverProjects } from "./discover";
+import { gitRootOf, isAdvisoryKind, severityAtLeast } from "./domain";
 import type {
   ExitCode,
   Finding,
@@ -22,19 +23,12 @@ import { policyForRepo } from "./policy";
 import type { PolicyLayers } from "./policy";
 import { preflight } from "./preflight";
 import { auditSettings } from "./settings";
+import { mapSerial } from "./std";
 
-const SEVERITY_RANK: Record<Severity, number> = {
-  critical: 4,
-  high: 3,
-  info: 0,
-  low: 1,
-  moderate: 2,
-};
-
-const GATE_RANK: Record<PresetName, number> = {
-  relaxed: SEVERITY_RANK.critical,
-  standard: SEVERITY_RANK.high,
-  strict: SEVERITY_RANK.moderate,
+const GATE_SEVERITY: Record<PresetName, Severity> = {
+  relaxed: "critical",
+  standard: "high",
+  strict: "moderate",
 };
 
 export interface AuditResult {
@@ -103,17 +97,14 @@ interface AuditedProject {
 const isIncomplete = (error: unknown): boolean =>
   typeof error === "object" && error !== null && "incomplete" in error;
 
-const isAdvisoryKind = (kind: Finding["kind"]): boolean =>
-  kind === "advisory" || kind === "deprecated" || kind === "quarantine";
-
-const failsGate = (finding: Finding, gate: number): boolean => {
+const failsGate = (finding: Finding, gate: Severity): boolean => {
   if (finding.kind === "missing-binary") {
     return false;
   }
   if (finding.kind === "deprecated" || finding.kind === "quarantine") {
     return true;
   }
-  return SEVERITY_RANK[finding.severity] >= gate;
+  return severityAtLeast(finding.severity, gate);
 };
 
 const versionsFromFindings = (
@@ -137,7 +128,7 @@ const versionsFromFindings = (
 const groupByGitRoot = (items: ApplySettingsItem[]): ApplySettingsItem[][] => {
   const groups = new Map<string, ApplySettingsItem[]>();
   for (const item of items) {
-    const key = item.project.gitRoot ?? item.project.root;
+    const key = gitRootOf(item.project);
     const group = groups.get(key) ?? [];
     group.push(item);
     groups.set(key, group);
@@ -168,28 +159,6 @@ const mapPool = async <T, R>(
   await Promise.all(Array.from({ length: size }, () => runNext()));
   return results;
 };
-
-const mapSerial = async <T, R>(
-  items: readonly T[],
-  fn: (item: T) => Promise<R>
-): Promise<R[]> => {
-  const out: R[] = [];
-  const runAt = async (index: number): Promise<void> => {
-    if (index >= items.length) {
-      return;
-    }
-    const item = items[index];
-    if (item !== undefined) {
-      out.push(await fn(item));
-    }
-    await runAt(index + 1);
-  };
-  await runAt(0);
-  return out;
-};
-
-const projectGitRoot = (project: Project): string =>
-  project.gitRoot ?? project.root;
 
 interface ApplyPhaseResult {
   appliedRoots: Set<string>;
@@ -224,7 +193,7 @@ const applyProjectSettings = (
   write: WriteDeps,
   appliedRoots: Set<string>
 ): ApplyPhaseResult => {
-  const gitRoot = projectGitRoot(row.project);
+  const gitRoot = gitRootOf(row.project);
   const applied = applySettings(row.project, row.findings, row.projectPolicy, {
     commit: write.commit,
     force: applySettingsForce(write, appliedRoots, gitRoot),
@@ -255,7 +224,7 @@ const applyProjectAdvisories = async (
   allowMajors: boolean
 ): Promise<ApplyPhaseResult> => {
   const { deps } = input;
-  const gitRoot = row.project.gitRoot ?? row.project.root;
+  const gitRoot = gitRootOf(row.project);
   // A root we just wrote settings into is dirty by our own doing; still apply.
   if (shouldSkipDirty(write, gitRoot, appliedRoots)) {
     return { appliedRoots: new Set(), skippedDirty: [gitRoot] };
@@ -385,7 +354,7 @@ const recordAuditedRow = (
   if (row.advisoryIncomplete) {
     acc.incomplete = true;
   }
-  const gate = GATE_RANK[row.projectPolicy.preset];
+  const gate = GATE_SEVERITY[row.projectPolicy.preset];
   if (row.findings.some((finding) => failsGate(finding, gate))) {
     acc.policyFailure = true;
   }
@@ -459,7 +428,7 @@ const applyOneSettingsGroup = (
     readFile: input.deps.readFile,
     writeFile: write.writeFile,
   });
-  const gitRoot = first.project.gitRoot ?? first.project.root;
+  const gitRoot = gitRootOf(first.project);
   return {
     appliedRoots: applied.written.length > 0 ? new Set([gitRoot]) : new Set(),
     skippedDirty: applied.skipped === "dirty" ? [gitRoot] : [],

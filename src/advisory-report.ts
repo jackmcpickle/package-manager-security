@@ -1,13 +1,11 @@
 import type { PackageAdvisory } from "./cache";
 import type { Finding, FindingKind, PackageManager, Severity } from "./domain";
+import { isPlainObject } from "./std";
 
 export interface ParsedAuditReport {
   findings: Finding[];
   packages: PackageAdvisory[];
 }
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const parseStdoutJson = (stdout: string): unknown | undefined => {
   try {

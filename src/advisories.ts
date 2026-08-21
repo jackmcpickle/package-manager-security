@@ -3,6 +3,7 @@ import type { ParsedAuditReport } from "./advisory-report";
 import type { AdvisoryResult, Cache, PackageAdvisory } from "./cache";
 import type { Finding, PackageManager, Policy, Project } from "./domain";
 import { profileFor } from "./managers/profile";
+import { mapSerial } from "./std";
 
 export type { AdvisoryResult, PackageAdvisory } from "./cache";
 
@@ -27,25 +28,6 @@ interface AuditRunDeps {
   refresh?: boolean;
   noCache?: boolean;
 }
-
-const mapSerial = async <T, R>(
-  items: readonly T[],
-  fn: (item: T) => Promise<R>
-): Promise<R[]> => {
-  const out: R[] = [];
-  const runAt = async (index: number): Promise<void> => {
-    if (index >= items.length) {
-      return;
-    }
-    const item = items[index];
-    if (item !== undefined) {
-      out.push(await fn(item));
-    }
-    await runAt(index + 1);
-  };
-  await runAt(0);
-  return out;
-};
 
 const readCachedFindings = (
   manager: Project["managers"][number],

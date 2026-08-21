@@ -2,6 +2,7 @@ import { parse } from "smol-toml";
 
 import type { PackageManager, Policy, PresetName } from "./domain";
 import { ALL_MANAGER_NAMES, CONFIG_MANAGER_NAMES } from "./managers/profile";
+import { isPlainObject } from "./std";
 
 export const PRESET_DEFAULTS = {
   relaxed: {
@@ -41,9 +42,6 @@ const isConfigManager = (value: unknown): value is PackageManager =>
 
 const isPackageManager = (value: unknown): value is PackageManager =>
   typeof value === "string" && PACKAGE_MANAGERS.has(value);
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 interface LayerAcc {
   preset?: PresetName;
