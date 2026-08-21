@@ -18,6 +18,7 @@ const LIVE_MANAGERS = new Set<PackageManager>([
   "uv",
   "cargo",
   "bundler",
+  "composer",
 ]);
 const OSV_MANAGERS = new Set<PackageManager>(["poetry", "pip", "pipenv"]);
 
@@ -33,6 +34,7 @@ const AUDIT_COMMANDS: Partial<Record<PackageManager, readonly string[]>> = {
   bun: ["bun", "audit", "--json"],
   bundler: ["bundle-audit", "check", "--format", "json"],
   cargo: ["cargo", "audit", "--json"],
+  composer: ["composer", "audit", "--format", "json", "--locked"],
   npm: ["npm", "audit", "--json"],
   pnpm: ["pnpm", "audit", "--json"],
   uv: ["uv", "audit", "--output-format", "json", "--frozen"],
@@ -169,8 +171,11 @@ const ghsaFromUrl = (url: string): string | undefined => {
 };
 
 const rawAdvisoryId = (item: Record<string, unknown>): unknown =>
+  item.advisoryId ??
   item.github_advisory_id ??
   item.id ??
+  item.cve ??
+  item.remoteId ??
   item.source ??
   (typeof item.url === "string" ? ghsaFromUrl(item.url) : undefined);
 
@@ -459,6 +464,7 @@ const shouldWalkFindings = (
   Array.isArray(item.findings) ||
   item.module_name !== undefined ||
   item.advisory !== undefined ||
+  item.advisoryId !== undefined ||
   kind === "deprecated" ||
   kind === "quarantine";
 
@@ -486,6 +492,7 @@ const versionsForItem = (item: Record<string, unknown>): string[] => {
 const itemPackageName = (item: Record<string, unknown>): string =>
   String(
     item.module_name ??
+      item.packageName ??
       item.name ??
       packageName(item.package) ??
       packageName(item.gem) ??
@@ -524,6 +531,10 @@ const walkFindingEntries = (
 };
 
 const walkItem = (item: unknown, push: AdvisoryPush): void => {
+  if (Array.isArray(item)) {
+    walkCollection(item, push);
+    return;
+  }
   if (!isPlainObject(item)) {
     return;
   }
@@ -541,7 +552,9 @@ const walkItem = (item: unknown, push: AdvisoryPush): void => {
   }
   if (shouldWalkFindings(item, kind)) {
     walkFindingEntries(item, kind, push);
+    return;
   }
+  walkCollection(item, push);
 };
 
 interface PackageBucket {
@@ -604,6 +617,29 @@ const mappedPackages = (
   packages: [...packages.values()],
 });
 
+const walkAbandoned = (
+  abandoned: unknown,
+  push: AdvisoryPush
+): void => {
+  if (!isPlainObject(abandoned)) {
+    return;
+  }
+  for (const name of Object.keys(abandoned)) {
+    if (name === "") {
+      continue;
+    }
+    push(
+      name,
+      "unknown",
+      "info",
+      "advisory.abandoned",
+      `${name} is abandoned`,
+      "deprecated",
+      undefined
+    );
+  }
+};
+
 const walkAuditRoots = (
   obj: Record<string, unknown>,
   push: AdvisoryPush
@@ -620,6 +656,7 @@ const walkAuditRoots = (
   walkCollection(obj.results, push);
   walkCollection(obj.dependencies, push);
   walkCollection(obj.audits, push);
+  walkAbandoned(obj.abandoned, push);
 };
 
 const mapAuditJson = (

@@ -35,6 +35,7 @@ const NESTED_CONFIGS = [
   "uv.toml",
   "uv.lock",
   "Cargo.toml",
+  "composer.json",
 ];
 
 interface Fs {
@@ -148,6 +149,8 @@ const ROOT_PM_FILES = [
   "Pipfile.lock",
   "Gemfile",
   "Gemfile.lock",
+  "composer.json",
+  "composer.lock",
 ] as const;
 
 const hasNamedFile = (names: Set<string>, files: readonly string[]): boolean =>
@@ -170,6 +173,8 @@ const NESTED_PM_MARKER_FILES = [
   "Gemfile.lock",
   "Pipfile",
   "Pipfile.lock",
+  "composer.json",
+  "composer.lock",
   "poetry.lock",
 ] as const;
 
@@ -670,6 +675,26 @@ const cargoConfigPath = (dir: string, fs: Fs): string => {
   return configToml;
 };
 
+const detectComposer = (
+  dir: string,
+  names: Set<string>,
+  jsPrimary: PackageManager | null
+): DetectedManager | null => {
+  const hasComposerJson = names.has("composer.json");
+  if (!hasComposerJson && !names.has("composer.lock")) {
+    return null;
+  }
+  const role: ManagerRole =
+    hasComposerJson || jsPrimary === null ? "primary" : "leftover";
+  return manager(
+    "composer",
+    role,
+    path.join(dir, "composer.json"),
+    names.has("composer.lock") ? path.join(dir, "composer.lock") : null,
+    hasComposerJson ? path.join(dir, "composer.json") : null
+  );
+};
+
 const detectCargo = (
   dir: string,
   names: Set<string>,
@@ -723,6 +748,7 @@ const detectManagers = (dir: string, fs: Fs): DetectedManager[] => {
     detectPip(dir, names, fs, uv !== null, poetry !== null, pipenv !== null)
   );
   appendManager(managers, detectBundler(dir, names, fs));
+  appendManager(managers, detectComposer(dir, names, jsPrimary));
   appendManager(managers, detectCargo(dir, names, fs, jsPrimary));
 
   return managers;

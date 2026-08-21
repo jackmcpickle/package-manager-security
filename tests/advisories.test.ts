@@ -992,7 +992,15 @@ test("bundler patched_versions as a string is parsed for fixVersion", async () =
 
 test("live advisory argv is one native command per manager", async () => {
   const cases: {
-    name: "npm" | "pnpm" | "yarn" | "bun" | "uv" | "cargo" | "bundler";
+    name:
+      | "npm"
+      | "pnpm"
+      | "yarn"
+      | "bun"
+      | "uv"
+      | "cargo"
+      | "bundler"
+      | "composer";
     argv: string[];
   }[] = [
     { argv: ["npm", "audit", "--json"], name: "npm" },
@@ -1007,6 +1015,10 @@ test("live advisory argv is one native command per manager", async () => {
     {
       argv: ["bundle-audit", "check", "--format", "json"],
       name: "bundler",
+    },
+    {
+      argv: ["composer", "audit", "--format", "json", "--locked"],
+      name: "composer",
     },
   ];
   await Promise.all(
@@ -1050,15 +1062,16 @@ test("live advisory argv is one native command per manager", async () => {
 
 test("enabledManagers omitting a live manager skips its native audit subprocess", async () => {
   const paths: Record<
-    "pnpm" | "cargo" | "bundler",
+    "pnpm" | "cargo" | "bundler" | "composer",
     { manifest: string; lockfile: string }
   > = {
     bundler: { lockfile: "/p/Gemfile.lock", manifest: "/p/Gemfile" },
     cargo: { lockfile: "/p/Cargo.lock", manifest: "/p/Cargo.toml" },
+    composer: { lockfile: "/p/composer.lock", manifest: "/p/composer.json" },
     pnpm: { lockfile: "/p/pnpm-lock.yaml", manifest: "/p/package.json" },
   };
   const cases: {
-    name: "pnpm" | "cargo" | "bundler";
+    name: "pnpm" | "cargo" | "bundler" | "composer";
     enabled: string[];
   }[] = [
     {
@@ -1072,6 +1085,10 @@ test("enabledManagers omitting a live manager skips its native audit subprocess"
     {
       enabled: ["npm", "yarn", "bun", "uv", "cargo"],
       name: "bundler",
+    },
+    {
+      enabled: ["npm", "yarn", "bun", "uv", "cargo", "bundler"],
+      name: "composer",
     },
   ];
   await Promise.all(

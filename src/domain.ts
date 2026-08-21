@@ -5,6 +5,7 @@ export type PackageManager =
   | "bun"
   | "uv"
   | "cargo"
+  | "composer"
   | "poetry"
   | "pip"
   | "pipenv"

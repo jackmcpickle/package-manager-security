@@ -128,6 +128,24 @@ test("missing bundler primary emits pm.missing-binary for bundle-audit", () => {
   );
 });
 
+test("missing composer primary emits pm.missing-binary for composer", () => {
+  const project: Project = {
+    gitRoot: "/php",
+    managers: [
+      {
+        configPath: "/php/composer.json",
+        lockfilePath: "/php/composer.lock",
+        manifestPath: "/php/composer.json",
+        name: "composer",
+        role: "primary",
+      },
+    ],
+    root: "/php",
+  };
+  const result = preflight(project, { which: () => null });
+  expect(result.missing).toEqual([{ binary: "composer", manager: "composer" }]);
+});
+
 test("missing yarn bun uv and cargo primaries each emit pm.missing-binary", () => {
   for (const name of ["yarn", "bun", "uv", "cargo"] as const) {
     const project: Project = {

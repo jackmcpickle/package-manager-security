@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { parse as parseTomlRaw } from "smol-toml";
 
 import { parseBundleConfig } from "./bundle-config";
+import { parseComposerManifest, readComposerSecurity } from "./composer-config";
 import type {
   DetectedManager,
   Finding,
@@ -1768,6 +1769,148 @@ const bundlerMinAgeFinding = (
   ];
 };
 
+const composerScriptsFinding = (
+  settings: ResolvedSettings,
+  allowPlugins: unknown,
+  configPath: string
+): Finding[] => {
+  if (!settings.ignoreScripts || allowPlugins !== true) {
+    return [];
+  }
+  return [
+    setting(
+      "scripts.unrestricted",
+      "composer allow-plugins must not be true",
+      "high",
+      configPath,
+      "composer"
+    ),
+  ];
+};
+
+const composerTlsFinding = (
+  disableTls: boolean,
+  secureHttp: boolean,
+  configPath: string
+): Finding[] => {
+  if (!disableTls && secureHttp) {
+    return [];
+  }
+  return [
+    setting(
+      "registry.unpinned",
+      "composer must keep secure-http enabled and disable-tls off",
+      "high",
+      configPath,
+      "composer"
+    ),
+  ];
+};
+
+const composerHttpRepoFinding = (
+  urls: string[],
+  preset: PresetName,
+  configPath: string
+): Finding[] => {
+  if (urls.length === 0) {
+    return [];
+  }
+  return [
+    advice(
+      "registry.unpinned",
+      `composer repositories must use https (${urls[0]})`,
+      configPath,
+      "composer",
+      pinSeverity(preset)
+    ),
+  ];
+};
+
+const composerPolicyFindings = (
+  security: ReturnType<typeof readComposerSecurity>,
+  configPath: string
+): Finding[] => {
+  const findings: Finding[] = [];
+  if (security.policyDisabled || security.advisoriesAudit === "ignore") {
+    findings.push(
+      setting(
+        "audit.disabled",
+        "composer policy.advisories.audit must not be ignore",
+        "high",
+        configPath,
+        "composer"
+      )
+    );
+  }
+  if (!security.advisoriesBlock) {
+    findings.push(
+      setting(
+        "audit.blocking-disabled",
+        "composer policy.advisories.block must be true",
+        "high",
+        configPath,
+        "composer"
+      )
+    );
+  }
+  if (!security.malwareBlock) {
+    findings.push(
+      setting(
+        "audit.malware-disabled",
+        "composer policy.malware.block must be true",
+        "high",
+        configPath,
+        "composer"
+      )
+    );
+  }
+  return findings;
+};
+
+const composerSourceFallbackFinding = (
+  sourceFallback: boolean,
+  preset: PresetName,
+  configPath: string
+): Finding[] => {
+  if (!sourceFallback) {
+    return [];
+  }
+  return [
+    setting(
+      "source-fallback.enabled",
+      "composer source-fallback must not be true",
+      pinSeverity(preset),
+      configPath,
+      "composer"
+    ),
+  ];
+};
+
+const auditComposer: ManagerAuditor = (project, manager, policy, readFile) => {
+  const settings = resolveSettings(policy, "composer");
+  const configPath = manager.configPath ?? `${project.root}/composer.json`;
+  const manifest = parseComposerManifest(readFile(configPath) ?? "") ?? {};
+  const security = readComposerSecurity(manifest);
+  return [
+    ...lockfileMissingFinding(
+      settings.requireLockfile,
+      lockfilePresent(manager, readFile, `${project.root}/composer.lock`),
+      manager.lockfilePath ?? `${project.root}/composer.lock`,
+      "composer.lock is required",
+      "composer"
+    ),
+    ...composerScriptsFinding(settings, security.allowPlugins, configPath),
+    ...composerTlsFinding(security.disableTls, security.secureHttp, configPath),
+    ...composerHttpRepoFinding(security.httpRepoUrls, policy.preset, configPath),
+    ...composerPolicyFindings(security, configPath),
+    ...composerSourceFallbackFinding(
+      security.sourceFallback,
+      policy.preset,
+      configPath
+    ),
+  ];
+};
+
 const auditBundler: ManagerAuditor = (project, manager, policy, readFile) => {
   const settings = resolveSettings(policy, "bundler");
   const configPath = manager.configPath ?? `${project.root}/.bundle/config`;
@@ -1788,6 +1931,7 @@ const AUDITORS: Partial<Record<PackageManager, ManagerAuditor>> = {
   bun: auditBun,
   bundler: auditBundler,
   cargo: auditCargo,
+  composer: auditComposer,
   npm: auditNpm,
   pnpm: auditPnpm,
   uv: auditUv,

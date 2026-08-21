@@ -2,7 +2,7 @@
 
 Audits package-manager security settings and advisories across monorepos and folders of many projects. It never writes anything unless you pass an apply flag.
 
-Works with npm, pnpm, yarn (Berry), bun, uv, cargo, and bundler. Yarn v1 and non-uv Python projects (Poetry, pip, Pipenv) get flagged but not fixed.
+Works with npm, pnpm, yarn (Berry), bun, uv, cargo, bundler, and composer. Yarn v1 and non-uv Python projects (Poetry, pip, Pipenv) get flagged but not fixed.
 
 Not the same as the npm package [`pmguard`](https://www.npmjs.com/package/pmguard), which hardens your global tool configs; this CLI audits per-project settings and lockfiles.
 
@@ -68,6 +68,7 @@ The settings behind those answers differ per manager:
 | uv | n/a | `exclude-newer` (date or `"1 day"`) | `uv.lock` |
 | cargo | n/a | `minimum-release-age` in `.cargo/config.toml` | `Cargo.lock` |
 | bundler | n/a | `BUNDLE_COOLDOWN` in `.bundle/config` | `Gemfile.lock` |
+| composer | `allow-plugins` must not be `true` | n/a (Composer has no cooldown yet) | `composer.lock` |
 
 Also checked: pnpm `blockExoticSubdeps`, npm `allow-git` / `allow-remote`, yarn
 `checksumBehavior`, `enableStrictSsl` and `enableHardenedMode`, and exclude
@@ -88,6 +89,9 @@ Manager-specific checks beyond the baseline:
 | uv | `audit.malware-check` | must be `true` (uv ≥ 0.11.31) |
 | cargo | `install.minimum-release-age` | duration string meeting the preset (e.g. `"1d"`) |
 | bundler | `BUNDLE_COOLDOWN` | days ≥ preset minimum |
+| composer | `config.policy` | advisories/malware blocking on; `policy.advisories.audit` must not be `ignore` |
+| composer | `secure-http` / `disable-tls` | TLS required; HTTP repository URLs are reported but not rewritten |
+| composer | `source-fallback` | must not be `true` (dist must not fall back to source) |
 
 Checks are version-aware. pnpm 11 turns `minimumReleaseAge` on at 1440 minutes
 and yarn defaults `npmMinimalAgeGate` to `1w` and `enableScripts` to `false`, so
@@ -111,6 +115,7 @@ available:
 | uv | `uv audit --output-format json --frozen` |
 | cargo | `cargo audit` |
 | bundler | `bundle-audit` |
+| composer | `composer audit --format json --locked` |
 
 Poetry, pip, and Pipenv use OSV lookups instead of a native audit command.
 Results are cached by lockfile digest; pass `--refresh` or `--no-cache` to bypass.

@@ -1,6 +1,11 @@
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
 import { parseBundleConfig, stringifyBundleConfig } from "./bundle-config";
+import {
+  mergeComposerManifest,
+  parseComposerManifest,
+  stringifyComposerManifest,
+} from "./composer-config";
 import type {
   DetectedManager,
   Finding,
@@ -586,6 +591,14 @@ const mergeCargo = (
   return `${stringifyToml(table).trimEnd()}\n`;
 };
 
+const mergeComposer = (raw: string, codes: Set<string>): string | null => {
+  const parsed = parseComposerManifest(raw);
+  if (parsed === null) {
+    return null;
+  }
+  return stringifyComposerManifest(mergeComposerManifest(parsed, codes));
+};
+
 const mergeBundleConfig = (
   raw: string,
   codes: Set<string>,
@@ -622,6 +635,9 @@ const renderConfig = (
   if (manager === "bundler") {
     return mergeBundleConfig(raw, codes, settings);
   }
+  if (manager === "composer") {
+    return mergeComposer(raw, codes);
+  }
   return mergeUv(raw, codes, settings);
 };
 
@@ -652,6 +668,7 @@ const uvConfigPath = (
 const LOCAL_CONFIG_FILE: Partial<Record<PackageManager, string>> = {
   bun: "bunfig.toml",
   bundler: ".bundle/config",
+  composer: "composer.json",
   npm: ".npmrc",
   pnpm: "pnpm-workspace.yaml",
   yarn: ".yarnrc.yml",

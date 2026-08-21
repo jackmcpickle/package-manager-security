@@ -34,6 +34,7 @@ const DEFAULT_ENABLED_MANAGERS: PackageManager[] = [
   "uv",
   "bundler",
   "cargo",
+  "composer",
 ];
 
 const CONFIG_MANAGERS = new Set<string>([
@@ -44,6 +45,7 @@ const CONFIG_MANAGERS = new Set<string>([
   "uv",
   "bundler",
   "cargo",
+  "composer",
 ]);
 
 const PACKAGE_MANAGERS = new Set<string>([
