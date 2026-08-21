@@ -51,6 +51,38 @@ const emptyReport = (): ParsedAuditReport => ({
   packages: [],
 });
 
+const isAuditExit = (code: number): boolean => code === 0 || code === 1;
+
+const runAuditCommand = async (
+  argv: string[],
+  cwd: string,
+  run: AuditRunDeps["run"]
+): Promise<{ code: number; stdout: string; stderr: string }> => {
+  try {
+    return await run(argv, cwd);
+  } catch {
+    throw incompleteError();
+  }
+};
+
+const parseLiveOutput = (
+  manager: Project["managers"][number],
+  stdout: string
+): ParsedAuditReport => {
+  if (stdout.trim() === "") {
+    return emptyReport();
+  }
+  const parsed = parseAuditOutput(
+    manager.name,
+    stdout,
+    manager.lockfilePath ?? manager.manifestPath
+  );
+  if (parsed === null) {
+    throw incompleteError();
+  }
+  return parsed;
+};
+
 const runLiveAudit = async (
   manager: Project["managers"][number],
   project: Project,
@@ -60,27 +92,11 @@ const runLiveAudit = async (
   if (!argv) {
     return null;
   }
-  let output: { code: number; stdout: string; stderr: string };
-  try {
-    output = await deps.run(argv, project.root);
-  } catch {
+  const output = await runAuditCommand(argv, project.root, deps.run);
+  if (!isAuditExit(output.code)) {
     throw incompleteError();
   }
-  if (output.code !== 0 && output.code !== 1) {
-    throw incompleteError();
-  }
-  if (output.stdout.trim() === "") {
-    return emptyReport();
-  }
-  const parsed = parseAuditOutput(
-    manager.name,
-    output.stdout,
-    manager.lockfilePath ?? manager.manifestPath
-  );
-  if (parsed === null) {
-    throw incompleteError();
-  }
-  return parsed;
+  return parseLiveOutput(manager, output.stdout);
 };
 
 interface PackageBucket {

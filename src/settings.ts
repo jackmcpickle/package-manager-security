@@ -631,6 +631,20 @@ const hasToolUv = (raw: string): boolean => {
   return isPlainObject(tool.uv);
 };
 
+const detectedPyprojectPath = (
+  manager: DetectedManager,
+  root: string
+): string | null => {
+  if (
+    manager.configPath !== null &&
+    isInside(manager.configPath, root) &&
+    manager.configPath.endsWith("pyproject.toml")
+  ) {
+    return manager.configPath;
+  }
+  return null;
+};
+
 const uvConfigPath = (
   project: Project,
   manager: DetectedManager,
@@ -641,14 +655,11 @@ const uvConfigPath = (
   if (readFile(uvToml) !== null) {
     return uvToml;
   }
-  const pyproject = joinRoot(project.root, pyprojectName ?? "pyproject.toml");
-  if (
-    manager.configPath !== null &&
-    isInside(manager.configPath, project.root) &&
-    manager.configPath.endsWith("pyproject.toml")
-  ) {
-    return manager.configPath;
+  const fromManager = detectedPyprojectPath(manager, project.root);
+  if (fromManager !== null) {
+    return fromManager;
   }
+  const pyproject = joinRoot(project.root, pyprojectName ?? "pyproject.toml");
   const raw = readFile(pyproject);
   if (raw !== null && hasToolUv(raw)) {
     return pyproject;

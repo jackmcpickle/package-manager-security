@@ -353,7 +353,8 @@ export const run = async (
 
   const layers: PolicyLayers = {
     flags: presetFlags(flags.preset),
-    scanToml: host.files.readFile(path.join(root, CONFIG_FILE_NAME)) ?? undefined,
+    scanToml:
+      host.files.readFile(path.join(root, CONFIG_FILE_NAME)) ?? undefined,
     userToml: host.files.readFile(userConfigPath(env)) ?? undefined,
   };
 
