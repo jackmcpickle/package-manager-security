@@ -1,5 +1,6 @@
 import { parse as parseTomlRaw } from "smol-toml";
 
+import { auditAgentic } from "./agentic";
 import { parseBundleConfig } from "./bundle-config";
 import { parseComposerManifest, readComposerSecurity } from "./composer-config";
 import { severityAtLeast } from "./domain";
@@ -68,6 +69,20 @@ const AGE_UNIT_PATTERN =
 const NPMRC_LINE_BREAK = /\r?\n/u;
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org/";
+
+const TRAILING_SLASHES = /\/+$/u;
+
+const normalizeRegistry = (url: string): string =>
+  url.trim().replace(TRAILING_SLASHES, "");
+
+const sameRegistry = (actual: string, expected: string): boolean =>
+  normalizeRegistry(actual) === normalizeRegistry(expected);
+
+const expectedRegistry = (settings: ResolvedSettings): string =>
+  settings.registry ?? DEFAULT_REGISTRY;
+
+const textUrl = (value: unknown): string | null =>
+  hasText(value) ? value.trim() : null;
 
 const MINUTES_PER_DAY = 24 * 60;
 
@@ -471,15 +486,13 @@ const npmrcAllowsNonRegistry = (npmrc: Record<string, string>): boolean =>
   npmrc["allow-file"] === "all" ||
   npmrc["allow-directory"] === "all";
 
-const pnpmRegistryPinned = (yaml: Record<string, unknown>): boolean => {
-  if (hasText(yaml["registry"])) {
-    return true;
+const pnpmRegistryUrl = (yaml: Record<string, unknown>): string | null => {
+  const top = textUrl(yaml["registry"]);
+  if (top !== null) {
+    return top;
   }
   const { registries } = yaml;
-  if (!isPlainObject(registries)) {
-    return false;
-  }
-  return hasText(registries["default"]);
+  return isPlainObject(registries) ? textUrl(registries["default"]) : null;
 };
 
 const bareMinutesToHours = (trimmed: string): number | null => {
@@ -585,12 +598,13 @@ const bunScriptsUnrestricted = (
   );
 };
 
-const bunRegistryPinned = (install: Record<string, unknown>): boolean => {
+const bunRegistryUrl = (install: Record<string, unknown>): string | null => {
   const { registry } = install;
-  if (hasText(registry)) {
-    return true;
+  const asText = textUrl(registry);
+  if (asText !== null) {
+    return asText;
   }
-  return isPlainObject(registry) && hasText(registry["url"]);
+  return isPlainObject(registry) ? textUrl(registry["url"]) : null;
 };
 
 const bunLockfilePresent = (
@@ -785,6 +799,61 @@ const registryUnpinnedFinding = (
           fix
         ),
       ];
+
+const registryMismatchFinding = (
+  currentUrl: string,
+  settings: ResolvedSettings,
+  preset: PresetName,
+  path: string,
+  manager: PackageManager,
+  fix: SettingsFix
+): Finding[] => {
+  if (
+    settings.registry === null ||
+    sameRegistry(currentUrl, settings.registry)
+  ) {
+    return [];
+  }
+  return [
+    setting(
+      "registry.mismatch",
+      `registry must be ${settings.registry}`,
+      pinSeverity(preset),
+      path,
+      manager,
+      fix
+    ),
+  ];
+};
+
+const registryPolicyFindings = (
+  currentUrl: string | null,
+  settings: ResolvedSettings,
+  unpinnedMessage: string,
+  preset: PresetName,
+  path: string,
+  manager: PackageManager,
+  fix: SettingsFix
+): Finding[] => {
+  if (currentUrl === null) {
+    return registryUnpinnedFinding(
+      false,
+      unpinnedMessage,
+      preset,
+      path,
+      manager,
+      fix
+    );
+  }
+  return registryMismatchFinding(
+    currentUrl,
+    settings,
+    preset,
+    path,
+    manager,
+    fix
+  );
+};
 
 const blanketExcludeFinding = (
   value: unknown,
@@ -1063,13 +1132,14 @@ const auditNpm: ManagerAuditor = (project, manager, policy, readFile) => {
     ),
     ...npmAuditFinding(npmrc, settings, npmrcPath, file),
     ...npmMinAgeFinding(settings, npmrc, npmrcPath, file),
-    ...registryUnpinnedFinding(
-      hasText(npmrc["registry"]),
+    ...registryPolicyFindings(
+      textUrl(npmrc["registry"]),
+      settings,
       "registry must be set in .npmrc",
       policy.preset,
       npmrcPath,
       "npm",
-      configFix(file, "npmrc", [setOp("registry", DEFAULT_REGISTRY)])
+      configFix(file, "npmrc", [setOp("registry", expectedRegistry(settings))])
     ),
     ...pmPinFinding(
       settings.requirePmPin,
@@ -1474,13 +1544,14 @@ const auditPnpm: ManagerAuditor = (project, manager, policy, readFile) => {
     ...pnpmTrustPolicyFinding(yaml, yamlPath, version, file),
     ...pnpmTrustLockfileFinding(yaml, yamlPath, file),
     ...pnpmVerifyDepsFinding(yaml, yamlPath, version, file),
-    ...registryUnpinnedFinding(
-      pnpmRegistryPinned(yaml),
+    ...registryPolicyFindings(
+      pnpmRegistryUrl(yaml),
+      settings,
       "registry or registries.default must be set",
       policy.preset,
       yamlPath,
       "pnpm",
-      configFix(file, "yaml", [setOp("registry", DEFAULT_REGISTRY)])
+      configFix(file, "yaml", [setOp("registry", expectedRegistry(settings))])
     ),
     ...pmPinFinding(
       settings.requirePmPin,
@@ -1741,13 +1812,16 @@ const auditYarn: ManagerAuditor = (project, manager, policy, readFile) => {
       "yarn"
     ),
     ...yarnAuditFinding(yarnrc, yarnrcPath, file),
-    ...registryUnpinnedFinding(
-      hasText(yarnrc["npmRegistryServer"]),
+    ...registryPolicyFindings(
+      textUrl(yarnrc["npmRegistryServer"]),
+      settings,
       "npmRegistryServer must be set",
       policy.preset,
       yarnrcPath,
       "yarn",
-      configFix(file, "yaml", [setOp("npmRegistryServer", DEFAULT_REGISTRY)])
+      configFix(file, "yaml", [
+        setOp("npmRegistryServer", expectedRegistry(settings)),
+      ])
     ),
     ...pmPinFinding(
       settings.requirePmPin,
@@ -1850,13 +1924,16 @@ const auditBun: ManagerAuditor = (project, manager, policy, readFile) => {
       "bun"
     ),
     ...bunMinAgeFindings(settings, install, bunfigPath, file),
-    ...registryUnpinnedFinding(
-      bunRegistryPinned(install),
+    ...registryPolicyFindings(
+      bunRegistryUrl(install),
+      settings,
       "install.registry must be set",
       policy.preset,
       bunfigPath,
       "bun",
-      configFix(file, "toml", [setOp("install.registry", DEFAULT_REGISTRY)])
+      configFix(file, "toml", [
+        setOp("install.registry", expectedRegistry(settings)),
+      ])
     ),
   ];
 };
@@ -2326,9 +2403,9 @@ const primaryFindings = (
     return [];
   }
   const auditor = AUDITORS[manager.name];
-  return auditor === undefined
-    ? []
-    : auditor(project, manager, policy, readFile);
+  const security =
+    auditor === undefined ? [] : auditor(project, manager, policy, readFile);
+  return [...security, ...auditAgentic(project, manager, policy, readFile)];
 };
 
 const managerFindings = (

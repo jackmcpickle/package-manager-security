@@ -9,6 +9,7 @@ const AUDIT_FLAGS = [
   "--allow-majors",
   "--apply",
   "--apply-advisories",
+  "--apply-agentic",
   "--commit",
   "--concurrency",
   "--fix",
@@ -95,6 +96,19 @@ test("help, --help, and -h print the command catalog on stdout and exit 0", asyn
     expectRootCatalog(result.stdout);
     expect(result.ran).toBe(0);
   }
+});
+
+test("audit help lists agentic checks with descriptions and caveats", async () => {
+  const result = await capture(["audit", "--help"]);
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("Agentic checks:");
+  expect(result.stdout).toContain("overrides.present");
+  expect(result.stdout).toContain("cache.path-committed");
+  expect(result.stdout).toContain("layout.pnp");
+  expect(result.stdout).toContain("apply never deletes a pin");
+  expect(result.stdout).toContain("never writes");
+  expect(result.stdout).toContain("agentic = true");
+  expect(result.stdout).toContain("applyAgentic = false");
 });
 
 test("help audit and audit --help describe audit arguments and flags without running an audit", async () => {

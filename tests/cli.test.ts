@@ -926,6 +926,41 @@ test("--concurrency 1 runs advisory audits serially; default and invalid values 
   expect(await maxFor(["--concurrency", "nope"])).toBeGreaterThan(1);
 });
 
+const AGENTIC_NPM_FILES: Record<string, string> = {
+  "/repo/.npmrc":
+    "ignore-scripts=true\nallow-scripts-pin=true\naudit=true\naudit-level=high\nmin-release-age=1\nregistry=https://registry.npmjs.org/\ncache=/Users/me/.npm\n",
+  "/repo/package-lock.json": `{"lockfileVersion":3}`,
+  "/repo/package.json": `{"name":"x","packageManager":"npm@11.0.0"}`,
+};
+
+test("--apply does not unset a committed cache path", async () => {
+  const files = { ...AGENTIC_NPM_FILES };
+  await run(
+    ["audit", "/repo", "--apply"],
+    capturingHost([], [], {
+      extraDirs: ["/repo/.git"],
+      fsMap: files,
+      gitStatus: () => "clean",
+      which: () => "/usr/bin/npm",
+    })
+  );
+  expect(files["/repo/.npmrc"]).toContain("cache=/Users/me/.npm");
+});
+
+test("--apply-agentic unsets a committed cache path", async () => {
+  const files = { ...AGENTIC_NPM_FILES };
+  await run(
+    ["audit", "/repo", "--apply-agentic"],
+    capturingHost([], [], {
+      extraDirs: ["/repo/.git"],
+      fsMap: files,
+      gitStatus: () => "clean",
+      which: () => "/usr/bin/npm",
+    })
+  );
+  expect(files["/repo/.npmrc"]).not.toContain("cache=");
+});
+
 test("--apply on a clean tree shows applied rows after the folder", async () => {
   mkdirSync(
     nodePath.join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"),

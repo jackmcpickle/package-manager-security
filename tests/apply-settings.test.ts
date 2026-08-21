@@ -21,6 +21,33 @@ const npmProject = (root: string): Project => ({
   root,
 });
 
+test("apply writes the configured registry when .npmrc has none", () => {
+  const files: Record<string, string> = {
+    "/p/.npmrc": `ignore-scripts=true\nallow-scripts-pin=true\naudit=true\naudit-level=high\nmin-release-age=7\n`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+  };
+  const project = npmProject("/p");
+  const policy = loadPolicy({
+    repoToml: `registry = "https://npm.corp.example/"\n`,
+  });
+  const findings = auditSettings(project, policy, {
+    readFile: (p) => files[p] ?? null,
+  });
+  const result = applySettings(project, findings, policy, {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  expect(result.skipped).toBeNull();
+  expect(files["/p/.npmrc"]).toContain("registry=https://npm.corp.example/");
+  expect(files["/p/.npmrc"]).not.toContain("registry.npmjs.org");
+});
+
 test("apply writes ignore-scripts to .npmrc on a clean tree", () => {
   const files: Record<string, string> = {
     "/p/.npmrc": `registry=https://registry.npmjs.org/\n`,
@@ -539,6 +566,7 @@ test("apply writes enableScripts: false to .yarnrc.yml preserving existing keys"
     "scripts.unrestricted",
     "min-age.disabled",
     "source.git-unrestricted",
+    "layout.pnp",
   ]);
   const result = applySettings(project, findings, loadPolicy({}), {
     commit: false,
@@ -556,6 +584,7 @@ test("apply writes enableScripts: false to .yarnrc.yml preserving existing keys"
   expect(files["/p/.yarnrc.yml"]).toContain("npmMinimalAgeGate: 1440");
   expect(files["/p/.yarnrc.yml"]).toContain("approvedGitRepositories: []");
   expect(files["/p/.yarnrc.yml"]).toContain("npmRegistryServer");
+  expect(files["/p/.yarnrc.yml"]).not.toContain("nodeLinker");
 });
 
 test("apply writes ignoreScripts to bunfig.toml preserving existing content", () => {

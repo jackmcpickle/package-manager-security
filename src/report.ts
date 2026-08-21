@@ -1,3 +1,4 @@
+import { agenticCaveat } from "./agentic";
 import { APP_NAME } from "./app-name";
 import type { ApplyChange, AuditResult } from "./audit";
 import { gitRootOf, isAdvisoryKind } from "./domain";
@@ -76,9 +77,13 @@ export const formatMarkdown = (result: AuditResult): string => {
       lines.push("- none");
     } else {
       for (const finding of findings) {
+        const caveat = agenticCaveat(finding.code);
         lines.push(
           `- \`${finding.code}\` (${finding.severity}): ${finding.message}`
         );
+        if (caveat !== null) {
+          lines.push(`  ${caveat}`);
+        }
       }
     }
     lines.push("");
@@ -218,6 +223,10 @@ export const formatHuman = (
       lines.push(
         `  ${paint(finding.code, ANSI.cyan, color)}  ${paint(finding.severity, SEVERITY_PAINT[finding.severity], color)}  ${finding.message}`
       );
+      const caveat = agenticCaveat(finding.code);
+      if (caveat !== null) {
+        lines.push(`    ${paint(caveat, ANSI.dim, color)}`);
+      }
     }
     const changes = (result.applyChanges ?? []).filter(
       (change) => change.projectRoot === project.root

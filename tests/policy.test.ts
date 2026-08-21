@@ -179,12 +179,35 @@ test("resolveSettings falls back to preset defaults when override types do not m
     },
   });
   expect(resolveSettings(policy, "npm")).toEqual({
+    agentic: true,
+    applyAgentic: false,
     auditLevel: "high",
     ignoreScripts: true,
     minReleaseAgeDays: 1,
+    registry: null,
     requireLockfile: true,
     requirePmPin: true,
   });
+});
+
+test("resolveSettings defaults agentic on and applyAgentic off", () => {
+  const settings = resolveSettings(loadPolicy({}), "npm");
+  expect(settings.agentic).toBe(true);
+  expect(settings.applyAgentic).toBe(false);
+});
+
+test("resolveSettings reads agentic and applyAgentic from config", () => {
+  const settings = resolveSettings(
+    loadPolicy({
+      repoToml: `
+agentic = false
+applyAgentic = true
+`,
+    }),
+    "npm"
+  );
+  expect(settings.agentic).toBe(false);
+  expect(settings.applyAgentic).toBe(true);
 });
 
 test("resolveSettings uses a typed per-manager value over the global override", () => {
@@ -197,4 +220,50 @@ ignoreScripts = false
   });
   expect(resolveSettings(policy, "pnpm").ignoreScripts).toBe(false);
   expect(resolveSettings(policy, "npm").ignoreScripts).toBe(true);
+});
+
+test("resolveSettings defaults registry to unset", () => {
+  expect(resolveSettings(loadPolicy({}), "npm").registry).toBeNull();
+});
+
+test("resolveSettings reads a global registry string", () => {
+  const settings = resolveSettings(
+    loadPolicy({
+      repoToml: `registry = "https://npm.corp.example/"\n`,
+    }),
+    "npm"
+  );
+  expect(settings.registry).toBe("https://npm.corp.example/");
+});
+
+test("resolveSettings uses a per-manager registry over the global one", () => {
+  const policy = loadPolicy({
+    repoToml: `
+registry = "https://npm.corp.example/"
+[yarn]
+registry = "https://yarn.corp.example/"
+`,
+  });
+  expect(resolveSettings(policy, "npm").registry).toBe(
+    "https://npm.corp.example/"
+  );
+  expect(resolveSettings(policy, "yarn").registry).toBe(
+    "https://yarn.corp.example/"
+  );
+});
+
+test("resolveSettings treats empty or non-string registry as unset", () => {
+  const empty = resolveSettings(
+    loadPolicy({ repoToml: `registry = "  "\n` }),
+    "npm"
+  );
+  expect(empty.registry).toBeNull();
+
+  const wrongType = resolveSettings(
+    loadPolicy({
+      flags: { overrides: { registry: true } },
+    }),
+    "npm"
+  );
+  expect(wrongType.registry).toBeNull();
 });

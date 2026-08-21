@@ -85,7 +85,7 @@ const pnpmFilesInsecure = (
 });
 
 const yarnFiles = (version: string, yaml: string): Record<string, string> => ({
-  "/p/.yarnrc.yml": `npmRegistryServer: "https://registry.npmjs.org/"\n${yaml}`,
+  "/p/.yarnrc.yml": `npmRegistryServer: "https://registry.npmjs.org/"\nnodeLinker: node-modules\n${yaml}`,
   "/p/package.json": `{"name":"x","packageManager":"yarn@${version}"}`,
   "/p/yarn.lock": "",
 });

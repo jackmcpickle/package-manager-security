@@ -24,6 +24,7 @@ interface AuditFlags {
   preset?: PresetName;
   apply: boolean;
   applyAdvisories: boolean;
+  applyAgentic: boolean;
   interactive: boolean;
   concurrency: number;
   json: boolean;
@@ -40,6 +41,7 @@ type BooleanFlagKey =
   | "allowMajors"
   | "apply"
   | "applyAdvisories"
+  | "applyAgentic"
   | "commit"
   | "force"
   | "interactive"
@@ -52,6 +54,7 @@ const BOOLEAN_FLAGS: Readonly<Record<string, BooleanFlagKey>> = {
   "--allow-majors": "allowMajors",
   "--apply": "apply",
   "--apply-advisories": "applyAdvisories",
+  "--apply-agentic": "applyAgentic",
   "--commit": "commit",
   "--fix": "apply",
   "--force": "force",
@@ -237,6 +240,7 @@ const parseAuditArgs = (args: string[]): AuditFlags => {
     allowMajors: false,
     apply: false,
     applyAdvisories: false,
+    applyAgentic: false,
     commit: false,
     concurrency: 4,
     force: false,
@@ -286,12 +290,12 @@ const modeFromFlags = (
       write,
     };
   }
-  if (flags.apply || flags.applyAdvisories) {
+  if (flags.apply || flags.applyAdvisories || flags.applyAgentic) {
     return {
       advisories: flags.applyAdvisories,
       allowMajors: flags.allowMajors,
       kind: "apply",
-      settings: flags.apply,
+      settings: flags.apply || flags.applyAgentic,
       write,
     };
   }
@@ -509,7 +513,10 @@ const runAudit = async (
   const flags = parseAuditArgs(rest);
   const root = resolveRoot(flags.path, cwd);
   const layers: PolicyLayers = {
-    flags: presetFlags(flags.preset),
+    flags: {
+      ...presetFlags(flags.preset),
+      ...(flags.applyAgentic ? { overrides: { applyAgentic: true } } : {}),
+    },
     scanToml: host.files.readFile(dirConfigPath(root)) ?? undefined,
     userToml: host.files.readFile(userConfigPath(env)) ?? undefined,
   };
