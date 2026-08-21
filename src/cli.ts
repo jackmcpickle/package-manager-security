@@ -370,6 +370,39 @@ const helpForCommand = (
   return writeHelp(formatCommandHelp(command, color), stdout);
 };
 
+const dispatchExplicitHelp = (
+  head: string,
+  rest: string[],
+  color: boolean,
+  stdout: (s: string) => void,
+  stderr: (s: string) => void
+): { exitCode: ExitCode } => {
+  const topic = topicFromHelpArgs(rest);
+  if (topic !== undefined) {
+    return helpForCommand(topic, color, stdout, stderr);
+  }
+  if (head === "help" && rest.some(isHelpFlag)) {
+    return helpForCommand("help", color, stdout, stderr);
+  }
+  return writeHelp(formatRootHelp(color), stdout);
+};
+
+const dispatchTrailingHelp = (
+  head: string,
+  rest: string[],
+  color: boolean,
+  stdout: (s: string) => void
+): { exitCode: ExitCode } | null => {
+  if (!rest.some(isHelpFlag)) {
+    return null;
+  }
+  const command = commandByName(head);
+  if (command === undefined) {
+    return null;
+  }
+  return writeHelp(formatCommandHelp(command, color), stdout);
+};
+
 const dispatchHelp = (
   head: string,
   rest: string[],
@@ -378,22 +411,9 @@ const dispatchHelp = (
   stderr: (s: string) => void
 ): { exitCode: ExitCode } | null => {
   if (head === "help" || isHelpFlag(head)) {
-    const topic = topicFromHelpArgs(rest);
-    if (topic === undefined) {
-      if (head === "help" && rest.some(isHelpFlag)) {
-        return helpForCommand("help", color, stdout, stderr);
-      }
-      return writeHelp(formatRootHelp(color), stdout);
-    }
-    return helpForCommand(topic, color, stdout, stderr);
+    return dispatchExplicitHelp(head, rest, color, stdout, stderr);
   }
-  if (rest.some(isHelpFlag)) {
-    const command = commandByName(head);
-    if (command !== undefined) {
-      return writeHelp(formatCommandHelp(command, color), stdout);
-    }
-  }
-  return null;
+  return dispatchTrailingHelp(head, rest, color, stdout);
 };
 
 export const run = async (
