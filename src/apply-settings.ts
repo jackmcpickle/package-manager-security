@@ -436,27 +436,26 @@ const displayValue = (value: unknown): string => {
 const editNext = (edit: ConfigEdit): string =>
   edit.op === "unset" ? REMOVED : displayValue(edit.value);
 
-const changesForItem = (
+const changesForTarget = (
   project: Project,
-  findings: Finding[],
-  readFile: (path: string) => string | null
+  format: ConfigFormat,
+  raw: string,
+  edits: readonly ConfigEdit[]
 ): SettingsChange[] => {
+  const table = parseTable(format, raw);
   const changes: SettingsChange[] = [];
-  for (const [filePath, target] of collectFixes(project, findings)) {
-    const table = parseTable(target.format, readFile(filePath) ?? "");
-    for (const edit of target.edits) {
-      const current = displayValue(getPath(table, edit.key));
-      const next = editNext(edit);
-      if (current === next) {
-        continue;
-      }
-      changes.push({
-        current,
-        next,
-        projectRoot: project.root,
-        setting: edit.key,
-      });
+  for (const edit of edits) {
+    const current = displayValue(getPath(table, edit.key));
+    const next = editNext(edit);
+    if (current === next) {
+      continue;
     }
+    changes.push({
+      current,
+      next,
+      projectRoot: project.root,
+      setting: edit.key,
+    });
   }
   return changes;
 };
@@ -471,19 +470,19 @@ const planSettings = (
   const files: { filePath: string; next: string }[] = [];
   const changes: SettingsChange[] = [];
   for (const item of items) {
-    changes.push(...changesForItem(item.project, item.findings, deps.readFile));
     for (const [filePath, target] of collectFixes(
       item.project,
       item.findings
     )) {
-      const next = EDITORS[target.format](
-        deps.readFile(filePath) ?? "",
-        target.edits
-      );
+      const raw = deps.readFile(filePath) ?? "";
+      const next = EDITORS[target.format](raw, target.edits);
       if (next === null) {
         continue;
       }
       files.push({ filePath, next });
+      changes.push(
+        ...changesForTarget(item.project, target.format, raw, target.edits)
+      );
     }
   }
   return { changes, files };

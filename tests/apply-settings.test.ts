@@ -461,6 +461,58 @@ test("apply does not overwrite invalid existing yaml", () => {
   expect(result.written).not.toContain("/p/pnpm-workspace.yaml");
 });
 
+test("apply does not report a skipped malformed yaml edit when a sibling file writes", () => {
+  const invalid = "packages: [\n  - '.'\n";
+  const files: Record<string, string> = {
+    "/p/.npmrc": `registry=https://registry.npmjs.org/\n`,
+    "/p/package-lock.json": `{}`,
+    "/p/package.json": `{"name":"x"}`,
+    "/p/pnpm-workspace.yaml": invalid,
+  };
+  const project = npmProject("/p");
+  const findings = [
+    ...auditSettings(project, loadPolicy({}), {
+      readFile: (p) => files[p] ?? null,
+    }),
+    {
+      code: "min-age.disabled",
+      fix: {
+        edits: [{ key: "minimumReleaseAge", op: "set", value: 1440 }],
+        file: "/p/pnpm-workspace.yaml",
+        format: "yaml" as const,
+      },
+      fixable: true,
+      kind: "settings" as const,
+      manager: "pnpm" as const,
+      message: "pnpm minimumReleaseAge must be set",
+      path: "/p/pnpm-workspace.yaml",
+      severity: "high" as const,
+    },
+  ];
+  const result = applySettings(project, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  expect(result.skipped).toBeNull();
+  expect(result.written).toContain("/p/.npmrc");
+  expect(result.written).not.toContain("/p/pnpm-workspace.yaml");
+  expect(files["/p/pnpm-workspace.yaml"]).toBe(invalid);
+  expect(result.changes).toContainEqual({
+    current: "(unset)",
+    next: "true",
+    projectRoot: "/p",
+    setting: "ignore-scripts",
+  });
+  expect(
+    result.changes.some((change) => change.setting === "minimumReleaseAge")
+  ).toBe(false);
+});
+
 test("apply writes enableScripts: false to .yarnrc.yml preserving existing keys", () => {
   const files: Record<string, string> = {
     "/p/.yarnrc.yml": `npmRegistryServer: "https://registry.npmjs.org/"\n`,
