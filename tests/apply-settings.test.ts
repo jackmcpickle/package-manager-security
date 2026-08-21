@@ -609,7 +609,8 @@ test("apply writes cargo minimum-release-age into .cargo/config.toml", () => {
 
 test("apply merges cargo fix into existing .cargo/config.toml", () => {
   const files: Record<string, string> = {
-    "/p/.cargo/config.toml": '[source.crates-io]\nreplace-with = "vendored-sources"\n',
+    "/p/.cargo/config.toml":
+      '[source.crates-io]\nreplace-with = "vendored-sources"\n',
     "/p/Cargo.lock": "# cargo\n",
     "/p/Cargo.toml": '[package]\nname = "x"\nversion = "0.1.0"\n',
   };
@@ -977,7 +978,8 @@ test("apply writes BUNDLE_COOLDOWN to .bundle/config", () => {
 
 test("apply updates existing .bundle/config preserving other keys", () => {
   const files: Record<string, string> = {
-    "/r/.bundle/config": '---\nBUNDLE_PATH: "vendor/bundle"\nBUNDLE_COOLDOWN: "0"\n',
+    "/r/.bundle/config":
+      '---\nBUNDLE_PATH: "vendor/bundle"\nBUNDLE_COOLDOWN: "0"\n',
     "/r/Gemfile": 'source "https://rubygems.org"\n',
     "/r/Gemfile.lock": "GEM\n",
   };

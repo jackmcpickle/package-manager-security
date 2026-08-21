@@ -942,6 +942,54 @@ test("bundler primary runs `bundle-audit check --format json` and parses results
   expect(advisory?.fixVersion).toBe("4.2.5.1");
 });
 
+test("bundler patched_versions as a string is parsed for fixVersion", async () => {
+  const cache = createFsCache(
+    path.join(cacheDir8, "bundler-string-patch"),
+    () => 1000,
+    86_400_000
+  );
+  const result = await auditAdvisories(
+    {
+      gitRoot: "/rb",
+      managers: [
+        {
+          configPath: "/rb/.bundle/config",
+          lockfilePath: "/rb/Gemfile.lock",
+          manifestPath: "/rb/Gemfile",
+          name: "bundler",
+          role: "primary",
+        },
+      ],
+      root: "/rb",
+    },
+    loadPolicy({}),
+    {
+      cache,
+      digest: () => "bundler-string-patch",
+      now: () => 1000,
+      readFile: () => "lock",
+      run: () => ({
+        code: 1,
+        stderr: "",
+        stdout: JSON.stringify({
+          results: [
+            {
+              advisory: {
+                criticality: "medium",
+                id: "CVE-TEST",
+                patched_versions: ">= 1.2.3",
+                title: "test",
+              },
+              gem: { name: "rack", version: "1.0.0" },
+            },
+          ],
+        }),
+      }),
+    }
+  );
+  expect(result.findings[0]?.fixVersion).toBe("1.2.3");
+});
+
 test("live advisory argv is one native command per manager", async () => {
   const cases: {
     name: "npm" | "pnpm" | "yarn" | "bun" | "uv" | "cargo" | "bundler";
@@ -1001,6 +1049,14 @@ test("live advisory argv is one native command per manager", async () => {
 });
 
 test("enabledManagers omitting a live manager skips its native audit subprocess", async () => {
+  const paths: Record<
+    "pnpm" | "cargo" | "bundler",
+    { manifest: string; lockfile: string }
+  > = {
+    bundler: { lockfile: "/p/Gemfile.lock", manifest: "/p/Gemfile" },
+    cargo: { lockfile: "/p/Cargo.lock", manifest: "/p/Cargo.toml" },
+    pnpm: { lockfile: "/p/pnpm-lock.yaml", manifest: "/p/package.json" },
+  };
   const cases: {
     name: "pnpm" | "cargo" | "bundler";
     enabled: string[];
@@ -1018,57 +1074,48 @@ test("enabledManagers omitting a live manager skips its native audit subprocess"
       name: "bundler",
     },
   ];
-  for (const row of cases) {
-    const calls: string[][] = [];
-    const cache = createFsCache(
-      path.join(cacheDir8, `disabled-${row.name}`),
-      () => 1000,
-      86_400_000
-    );
-    const manifest =
-      row.name === "pnpm"
-        ? "/p/package.json"
-        : row.name === "cargo"
-          ? "/p/Cargo.toml"
-          : "/p/Gemfile";
-    const lockfile =
-      row.name === "pnpm"
-        ? "/p/pnpm-lock.yaml"
-        : row.name === "cargo"
-          ? "/p/Cargo.lock"
-          : "/p/Gemfile.lock";
-    const result = await auditAdvisories(
-      {
-        gitRoot: "/p",
-        managers: [
-          {
-            configPath: null,
-            lockfilePath: lockfile,
-            manifestPath: manifest,
-            name: row.name,
-            role: "primary",
-          },
-        ],
-        root: "/p",
-      },
-      loadPolicy({
-        scanToml: `enabledManagers = ${JSON.stringify(row.enabled)}\n`,
-      }),
-      {
-        cache,
-        digest: () => `disabled-${row.name}`,
-        now: () => 1000,
-        readFile: () => "lock",
-        run: (argv) => {
-          calls.push(argv);
-          return { code: 1, stderr: "", stdout: `{"advisories":{}}` };
+  await Promise.all(
+    cases.map(async (row) => {
+      const calls: string[][] = [];
+      const cache = createFsCache(
+        path.join(cacheDir8, `disabled-${row.name}`),
+        () => 1000,
+        86_400_000
+      );
+      const { lockfile, manifest } = paths[row.name];
+      const result = await auditAdvisories(
+        {
+          gitRoot: "/p",
+          managers: [
+            {
+              configPath: null,
+              lockfilePath: lockfile,
+              manifestPath: manifest,
+              name: row.name,
+              role: "primary",
+            },
+          ],
+          root: "/p",
         },
-      }
-    );
-    expect(calls).toEqual([]);
-    expect(result.findings).toEqual([]);
-    expect(result.ranLive).toBe(false);
-  }
+        loadPolicy({
+          scanToml: `enabledManagers = ${JSON.stringify(row.enabled)}\n`,
+        }),
+        {
+          cache,
+          digest: () => `disabled-${row.name}`,
+          now: () => 1000,
+          readFile: () => "lock",
+          run: (argv) => {
+            calls.push(argv);
+            return { code: 1, stderr: "", stdout: `{"advisories":{}}` };
+          },
+        }
+      );
+      expect(calls).toEqual([]);
+      expect(result.findings).toEqual([]);
+      expect(result.ranLive).toBe(false);
+    })
+  );
 });
 
 test("npm v7 vulnerabilities map fills package currentVersion and fixVersion", async () => {

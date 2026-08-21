@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { parse as parseTomlRaw } from "smol-toml";
 
+import { parseBundleConfig } from "./bundle-config";
 import type {
   DetectedManager,
   Finding,
@@ -141,30 +142,6 @@ const parseNpmrc = (raw: string): Record<string, string> => {
     }
     const key = trimmed.slice(0, eq).trim();
     const value = trimmed.slice(eq + 1).trim();
-    out[key] = value;
-  }
-  return out;
-};
-
-const parseBundleConfig = (raw: string): Record<string, string> => {
-  const out: Record<string, string> = {};
-  for (const line of raw.split(NPMRC_LINE_BREAK)) {
-    const trimmed = line.trim();
-    if (trimmed === "" || trimmed === "---" || trimmed.startsWith("#")) {
-      continue;
-    }
-    const colon = trimmed.indexOf(":");
-    if (colon <= 0) {
-      continue;
-    }
-    const key = trimmed.slice(0, colon).trim();
-    let value = trimmed.slice(colon + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
     out[key] = value;
   }
   return out;
@@ -507,7 +484,7 @@ const yarnGitReposBlocked = (yarnrc: Record<string, unknown>): boolean => {
 };
 
 const readUvAudit = (cfg: Record<string, unknown>): Record<string, unknown> => {
-  const audit = cfg["audit"];
+  const { audit } = cfg;
   return isPlainObject(audit) ? audit : {};
 };
 
@@ -922,7 +899,13 @@ const auditNpm: ManagerAuditor = (project, manager, policy, readFile) => {
   const npmrc = parseNpmrc(readFile(npmrcPath) ?? "");
   const manifestRaw = readFile(manager.manifestPath);
   return [
-    ...npmScriptsFindings(settings, npmrc, manifestRaw, npmrcPath, policy.preset),
+    ...npmScriptsFindings(
+      settings,
+      npmrc,
+      manifestRaw,
+      npmrcPath,
+      policy.preset
+    ),
     ...npmSourceFinding(settings, npmrc, npmrcPath),
     ...lockfileMissingFinding(
       settings.requireLockfile,
@@ -1476,12 +1459,7 @@ const auditYarn: ManagerAuditor = (project, manager, policy, readFile) => {
     ),
     ...yarnMinAgeFindings(settings, yarnrc, yarnrcPath, ageGateByDefault),
     ...yarnIntegrityFindings(yarnrc, yarnrcPath),
-    ...yarnGitSourceFinding(
-      settings,
-      yarnrc,
-      yarnrcPath,
-      gitBlockingSupported
-    ),
+    ...yarnGitSourceFinding(settings, yarnrc, yarnrcPath, gitBlockingSupported),
     ...lockfileMissingFinding(
       settings.requireLockfile,
       lockfilePresent(manager, readFile, `${project.root}/yarn.lock`),
@@ -1723,7 +1701,9 @@ const cargoMinAgeFinding = (
   install: Record<string, unknown>,
   configPath: string
 ): Finding[] => {
-  if (cargoMinAgeMeets(install["minimum-release-age"], settings.minReleaseAgeDays)) {
+  if (
+    cargoMinAgeMeets(install["minimum-release-age"], settings.minReleaseAgeDays)
+  ) {
     return [];
   }
   return [
@@ -1752,8 +1732,7 @@ const auditCargo: ManagerAuditor = (project, manager, policy, readFile) => {
   const settings = resolveSettings(policy, "cargo");
   const cfg = readCargoConfig(project, readFile);
   const install = isPlainObject(cfg["install"]) ? cfg["install"] : {};
-  const configPath =
-    manager.configPath ?? `${project.root}/.cargo/config.toml`;
+  const configPath = manager.configPath ?? `${project.root}/.cargo/config.toml`;
   return [
     ...lockfileMissingFinding(
       settings.requireLockfile,
@@ -1791,8 +1770,7 @@ const bundlerMinAgeFinding = (
 
 const auditBundler: ManagerAuditor = (project, manager, policy, readFile) => {
   const settings = resolveSettings(policy, "bundler");
-  const configPath =
-    manager.configPath ?? `${project.root}/.bundle/config`;
+  const configPath = manager.configPath ?? `${project.root}/.bundle/config`;
   const config = parseBundleConfig(readFile(configPath) ?? "");
   return [
     ...lockfileMissingFinding(

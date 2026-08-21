@@ -23,13 +23,13 @@ const LOCK_NAME: Record<string, string> = {
   yarn: "yarn.lock",
 };
 
+const MANIFEST_NAME: Partial<Record<PackageManager, string>> = {
+  cargo: "Cargo.toml",
+  uv: "pyproject.toml",
+};
+
 const project = (name: PackageManager, root = "/p"): Project => {
-  const manifest =
-    name === "uv"
-      ? "pyproject.toml"
-      : name === "cargo"
-        ? "Cargo.toml"
-        : "package.json";
+  const manifest = MANIFEST_NAME[name] ?? "package.json";
   return {
     gitRoot: root,
     managers: [
@@ -401,7 +401,9 @@ test("yarn 4.13 predates approvedGitRepositories so missing key is high", () => 
 test("yarn git source check skipped when ignoreScripts policy is off", () => {
   const files = yarnFiles("4.15.0", "npmMinimalAgeGate: 1440\n");
   const relaxed = loadPolicy({ flags: { preset: "relaxed" } });
-  expect(codes("yarn", files, relaxed)).not.toContain("source.git-unrestricted");
+  expect(codes("yarn", files, relaxed)).not.toContain(
+    "source.git-unrestricted"
+  );
 });
 
 // --- bun --------------------------------------------------------------------
@@ -523,9 +525,9 @@ test("cargo minimum-release-age accepts duration strings", () => {
   expect(codes("cargo", cargoFiles('minimum-release-age = "1d"\n'))).toEqual(
     []
   );
-  expect(codes("cargo", cargoFiles('minimum-release-age = "1 week"\n'))).toEqual(
-    []
-  );
+  expect(
+    codes("cargo", cargoFiles('minimum-release-age = "1 week"\n'))
+  ).toEqual([]);
   expect(codes("cargo", cargoFiles('minimum-release-age = "12h"\n'))).toContain(
     "min-age.disabled"
   );
@@ -557,15 +559,15 @@ const uvFiles = (toolUv: string): Record<string, string> => ({
 
 test("uv exclude-newer accepts uv's own duration spelling", () => {
   const audit = `\n\n[tool.uv.audit]\nmalware-check = true\n`;
-  expect(
-    codes("uv", uvFiles(`exclude-newer = "1 days"\n${audit}`))
-  ).toEqual([]);
-  expect(
-    codes("uv", uvFiles(`exclude-newer = "1 week"\n${audit}`))
-  ).toEqual([]);
-  expect(codes("uv", uvFiles(`exclude-newer = "12 hours"\n${audit}`))).toContain(
-    "min-age.disabled"
+  expect(codes("uv", uvFiles(`exclude-newer = "1 days"\n${audit}`))).toEqual(
+    []
   );
+  expect(codes("uv", uvFiles(`exclude-newer = "1 week"\n${audit}`))).toEqual(
+    []
+  );
+  expect(
+    codes("uv", uvFiles(`exclude-newer = "12 hours"\n${audit}`))
+  ).toContain("min-age.disabled");
 });
 
 test("a wildcard exclude-newer-package voids the uv gate", () => {

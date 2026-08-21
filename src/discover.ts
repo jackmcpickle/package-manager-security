@@ -163,21 +163,26 @@ const hasRootPmMarkers = (dir: string, fs: Fs): boolean => {
   );
 };
 
+const NESTED_PM_MARKER_FILES = [
+  "Cargo.lock",
+  "Cargo.toml",
+  "Gemfile",
+  "Gemfile.lock",
+  "Pipfile",
+  "Pipfile.lock",
+  "poetry.lock",
+] as const;
+
+const hasNestedPmFiles = (names: Set<string>): boolean =>
+  NESTED_PM_MARKER_FILES.some((file) => names.has(file)) ||
+  hasRequirementsTxt(names);
+
 const hasNestedConfig = (dir: string, fs: Fs): boolean => {
   const names = new Set(fs.readDir(dir));
   if (NESTED_CONFIGS.some((name) => names.has(name))) {
     return true;
   }
-  if (
-    names.has("poetry.lock") ||
-    names.has("Pipfile") ||
-    names.has("Pipfile.lock") ||
-    names.has("Cargo.toml") ||
-    names.has("Cargo.lock") ||
-    names.has("Gemfile") ||
-    names.has("Gemfile.lock") ||
-    hasRequirementsTxt(names)
-  ) {
+  if (hasNestedPmFiles(names)) {
     return true;
   }
   return hasToolPoetry(dir, fs) || hasProjectTable(dir, fs);
@@ -603,12 +608,13 @@ const detectBundler = (
     return null;
   }
   const configPath = path.join(dir, ".bundle/config");
+  const hasConfig = fs.readFile(configPath) !== null;
   return manager(
     "bundler",
     "primary",
     path.join(dir, "Gemfile"),
     names.has("Gemfile.lock") ? path.join(dir, "Gemfile.lock") : null,
-    fs.readFile(configPath) !== null ? configPath : null
+    hasConfig ? configPath : null
   );
 };
 

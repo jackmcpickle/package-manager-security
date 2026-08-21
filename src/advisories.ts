@@ -29,33 +29,19 @@ const incompleteError = (): Error & { incomplete: true } =>
     incomplete: true as const,
   });
 
+const AUDIT_COMMANDS: Partial<Record<PackageManager, readonly string[]>> = {
+  bun: ["bun", "audit", "--json"],
+  bundler: ["bundle-audit", "check", "--format", "json"],
+  cargo: ["cargo", "audit", "--json"],
+  npm: ["npm", "audit", "--json"],
+  pnpm: ["pnpm", "audit", "--json"],
+  uv: ["uv", "audit", "--output-format", "json", "--frozen"],
+  yarn: ["yarn", "npm", "audit", "--json"],
+};
+
 const auditArgv = (name: PackageManager): string[] | null => {
-  switch (name) {
-    case "npm": {
-      return ["npm", "audit", "--json"];
-    }
-    case "pnpm": {
-      return ["pnpm", "audit", "--json"];
-    }
-    case "bun": {
-      return ["bun", "audit", "--json"];
-    }
-    case "yarn": {
-      return ["yarn", "npm", "audit", "--json"];
-    }
-    case "uv": {
-      return ["uv", "audit", "--output-format", "json", "--frozen"];
-    }
-    case "cargo": {
-      return ["cargo", "audit", "--json"];
-    }
-    case "bundler": {
-      return ["bundle-audit", "check", "--format", "json"];
-    }
-    default: {
-      return null;
-    }
-  }
+  const argv = AUDIT_COMMANDS[name];
+  return argv ? [...argv] : null;
 };
 
 const parseJson = (stdout: string): unknown => {
@@ -105,10 +91,9 @@ const versionFromRange = (range: string): string | undefined => {
   return match?.groups?.version;
 };
 
-const kindFromItem = (
-  item: Record<string, unknown>,
-  fallback: FindingKind
-): FindingKind => {
+const advisoryKindOverride = (
+  item: Record<string, unknown>
+): FindingKind | null => {
   const status = String(item.status ?? "").toLowerCase();
   if (status === "deprecated" || item.deprecated === true) {
     return "deprecated";
@@ -116,8 +101,13 @@ const kindFromItem = (
   if (status === "quarantine" || item.quarantine === true) {
     return "quarantine";
   }
-  return fallback;
+  return null;
 };
+
+const kindFromItem = (
+  item: Record<string, unknown>,
+  fallback: FindingKind
+): FindingKind => advisoryKindOverride(item) ?? fallback;
 
 const packageName = (value: unknown): string | undefined => {
   if (isPlainObject(value) && typeof value.name === "string") {
@@ -153,11 +143,22 @@ const firstArrayVersion = (items: unknown): string | undefined => {
   }
 };
 
+const directVersion = (item: Record<string, unknown>): string | undefined => {
+  for (const field of [
+    item.version,
+    item.installedVersion,
+    packageVersion(item.package),
+    packageVersion(item.gem),
+  ]) {
+    const version = concreteVersion(field);
+    if (version !== undefined) {
+      return version;
+    }
+  }
+};
+
 const firstVersion = (item: Record<string, unknown>): string =>
-  concreteVersion(item.version) ??
-  concreteVersion(item.installedVersion) ??
-  concreteVersion(packageVersion(item.package)) ??
-  concreteVersion(packageVersion(item.gem)) ??
+  directVersion(item) ??
   firstArrayVersion(item.findings) ??
   firstArrayVersion(item.via) ??
   "unknown";
@@ -246,22 +247,30 @@ const fixFromPatchKeys = (
   }
 };
 
+const fixFromPatchedVersions = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    return versionFromRange(value);
+  }
+  if (!Array.isArray(value)) {
+    return;
+  }
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const version = versionFromRange(entry);
+    if (version !== undefined) {
+      return version;
+    }
+  }
+};
+
 const fixFromPatchedOrFixed = (
   item: Record<string, unknown>
 ): string | undefined => {
-  if (typeof item.patched_versions === "string") {
-    return versionFromRange(item.patched_versions);
-  }
-  if (Array.isArray(item.patched_versions)) {
-    for (const entry of item.patched_versions) {
-      if (typeof entry !== "string") {
-        continue;
-      }
-      const version = versionFromRange(entry);
-      if (version !== undefined) {
-        return version;
-      }
-    }
+  const patched = fixFromPatchedVersions(item.patched_versions);
+  if (patched !== undefined) {
+    return patched;
   }
   if (Array.isArray(item.fixed) && typeof item.fixed[0] === "string") {
     return item.fixed[0];
@@ -595,6 +604,24 @@ const mappedPackages = (
   packages: [...packages.values()],
 });
 
+const walkAuditRoots = (
+  obj: Record<string, unknown>,
+  push: AdvisoryPush
+): void => {
+  walkCollection(obj.advisories, push);
+  if (
+    isPlainObject(obj.vulnerabilities) &&
+    Array.isArray(obj.vulnerabilities.list)
+  ) {
+    walkCollection(obj.vulnerabilities.list, push);
+  } else {
+    walkCollection(obj.vulnerabilities, push);
+  }
+  walkCollection(obj.results, push);
+  walkCollection(obj.dependencies, push);
+  walkCollection(obj.audits, push);
+};
+
 const mapAuditJson = (
   parsed: unknown,
   manager: PackageManager,
@@ -619,18 +646,7 @@ const mapAuditJson = (
     walkItem(obj, push);
     return mappedPackages(findings, packages);
   }
-  walkCollection(obj.advisories, push);
-  if (
-    isPlainObject(obj.vulnerabilities) &&
-    Array.isArray(obj.vulnerabilities.list)
-  ) {
-    walkCollection(obj.vulnerabilities.list, push);
-  } else {
-    walkCollection(obj.vulnerabilities, push);
-  }
-  walkCollection(obj.results, push);
-  walkCollection(obj.dependencies, push);
-  walkCollection(obj.audits, push);
+  walkAuditRoots(obj, push);
   return mappedPackages(findings, packages);
 };
 

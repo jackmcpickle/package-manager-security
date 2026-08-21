@@ -1,5 +1,6 @@
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
+import { parseBundleConfig, stringifyBundleConfig } from "./bundle-config";
 import type {
   DetectedManager,
   Finding,
@@ -244,31 +245,38 @@ const npmrcUpdates = (
   codes: Set<string>,
   settings: ResolvedSettings
 ): Record<string, string> => {
+  const fixes: [
+    string,
+    Record<string, string> | (() => Record<string, string>),
+  ][] = [
+    ["scripts.unrestricted", { "ignore-scripts": "true" }],
+    [
+      "audit.disabled",
+      () => ({ audit: "true", "audit-level": settings.auditLevel }),
+    ],
+    [
+      "min-age.disabled",
+      () => ({ "min-release-age": String(settings.minReleaseAgeDays) }),
+    ],
+    [
+      "source.non-registry",
+      {
+        "allow-directory": "none",
+        "allow-file": "none",
+        "allow-git": "none",
+        "allow-remote": "none",
+      },
+    ],
+    ["scripts.pin-missing", { "allow-scripts-pin": "true" }],
+    ["scripts.bypass-enabled", { "dangerously-allow-all-scripts": "false" }],
+    ["registry.unpinned", { registry: DEFAULT_REGISTRY }],
+  ];
   const updates: Record<string, string> = {};
-  if (codes.has("scripts.unrestricted")) {
-    updates["ignore-scripts"] = "true";
-  }
-  if (codes.has("audit.disabled")) {
-    updates.audit = "true";
-    updates["audit-level"] = settings.auditLevel;
-  }
-  if (codes.has("min-age.disabled")) {
-    updates["min-release-age"] = String(settings.minReleaseAgeDays);
-  }
-  if (codes.has("source.non-registry")) {
-    updates["allow-git"] = "none";
-    updates["allow-remote"] = "none";
-    updates["allow-file"] = "none";
-    updates["allow-directory"] = "none";
-  }
-  if (codes.has("scripts.pin-missing")) {
-    updates["allow-scripts-pin"] = "true";
-  }
-  if (codes.has("scripts.bypass-enabled")) {
-    updates["dangerously-allow-all-scripts"] = "false";
-  }
-  if (codes.has("registry.unpinned")) {
-    updates.registry = DEFAULT_REGISTRY;
+  for (const [code, fix] of fixes) {
+    if (!codes.has(code)) {
+      continue;
+    }
+    Object.assign(updates, typeof fix === "function" ? fix() : fix);
   }
   return updates;
 };
@@ -508,17 +516,11 @@ const mergeBunfig = (
   return `${stringifyToml(table).trimEnd()}\n`;
 };
 
-const mergeUv = (
-  raw: string,
+const applyUvFixes = (
+  target: Record<string, unknown>,
   codes: Set<string>,
   settings: ResolvedSettings
-): string | null => {
-  const parsed = parseTomlObject(raw);
-  if (!parsed.ok) {
-    return null;
-  }
-  const table = parsed.value;
-  const target = uvWriteTable(table);
+): void => {
   if (codes.has("min-age.disabled")) {
     target["exclude-newer"] = new Date(
       Date.now() - settings.minReleaseAgeDays * 86_400_000
@@ -541,6 +543,20 @@ const mergeUv = (
     audit["malware-check"] = true;
     target.audit = audit;
   }
+};
+
+const mergeUv = (
+  raw: string,
+  codes: Set<string>,
+  settings: ResolvedSettings
+): string | null => {
+  const parsed = parseTomlObject(raw);
+  if (!parsed.ok) {
+    return null;
+  }
+  const table = parsed.value;
+  const target = uvWriteTable(table);
+  applyUvFixes(target, codes, settings);
   return `${stringifyToml(table).trimEnd()}\n`;
 };
 
@@ -570,38 +586,6 @@ const mergeCargo = (
   }
   table.install = install;
   return `${stringifyToml(table).trimEnd()}\n`;
-};
-
-const parseBundleConfig = (raw: string): Record<string, string> => {
-  const out: Record<string, string> = {};
-  for (const line of raw.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (trimmed === "" || trimmed === "---" || trimmed.startsWith("#")) {
-      continue;
-    }
-    const colon = trimmed.indexOf(":");
-    if (colon <= 0) {
-      continue;
-    }
-    const key = trimmed.slice(0, colon).trim();
-    let value = trimmed.slice(colon + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    out[key] = value;
-  }
-  return out;
-};
-
-const stringifyBundleConfig = (config: Record<string, string>): string => {
-  const lines = ["---"];
-  for (const [key, value] of Object.entries(config)) {
-    lines.push(`${key}: "${value}"`);
-  }
-  return `${lines.join("\n")}\n`;
 };
 
 const mergeBundleConfig = (
@@ -667,37 +651,27 @@ const uvConfigPath = (
   return uvToml;
 };
 
+const LOCAL_CONFIG_FILE: Partial<Record<PackageManager, string>> = {
+  bun: "bunfig.toml",
+  bundler: ".bundle/config",
+  npm: ".npmrc",
+  pnpm: "pnpm-workspace.yaml",
+  yarn: ".yarnrc.yml",
+};
+
 const configPathFor = (
   project: Project,
   manager: DetectedManager,
   readFile: (path: string) => string | null
 ): string | null => {
-  switch (manager.name) {
-    case "npm": {
-      return localPath(project.root, ".npmrc");
-    }
-    case "pnpm": {
-      return localPath(project.root, "pnpm-workspace.yaml");
-    }
-    case "yarn": {
-      return localPath(project.root, ".yarnrc.yml");
-    }
-    case "bun": {
-      return localPath(project.root, "bunfig.toml");
-    }
-    case "cargo": {
-      return manager.configPath ?? localPath(project.root, ".cargo/config.toml");
-    }
-    case "bundler": {
-      return localPath(project.root, ".bundle/config");
-    }
-    case "uv": {
-      return uvConfigPath(project, manager, readFile);
-    }
-    default: {
-      return null;
-    }
+  if (manager.name === "uv") {
+    return uvConfigPath(project, manager, readFile);
   }
+  if (manager.name === "cargo") {
+    return manager.configPath ?? localPath(project.root, ".cargo/config.toml");
+  }
+  const file = LOCAL_CONFIG_FILE[manager.name];
+  return file ? localPath(project.root, file) : null;
 };
 
 const isSettingsFix = (finding: Finding): boolean =>
