@@ -961,6 +961,27 @@ test("--apply-agentic unsets a committed cache path", async () => {
   expect(files["/repo/.npmrc"]).not.toContain("cache=");
 });
 
+test("--apply-agentic does not write ordinary settings fixes", async () => {
+  const files: Record<string, string> = {
+    "/repo/.npmrc":
+      "cache=/Users/me/.npm\nregistry=https://registry.npmjs.org/\n",
+    "/repo/package-lock.json": `{"lockfileVersion":3}`,
+    "/repo/package.json": `{"name":"x","packageManager":"npm@11.0.0"}`,
+  };
+  await run(
+    ["audit", "/repo", "--apply-agentic"],
+    capturingHost([], [], {
+      extraDirs: ["/repo/.git"],
+      fsMap: files,
+      gitStatus: () => "clean",
+      which: () => "/usr/bin/npm",
+    })
+  );
+  expect(files["/repo/.npmrc"]).not.toContain("ignore-scripts");
+  expect(files["/repo/.npmrc"]).not.toContain("min-release-age");
+  expect(files["/repo/.npmrc"]).not.toContain("cache=");
+});
+
 test("--apply on a clean tree shows applied rows after the folder", async () => {
   mkdirSync(
     nodePath.join(import.meta.dir, "fixtures/discover/many-repos/alpha/.git"),

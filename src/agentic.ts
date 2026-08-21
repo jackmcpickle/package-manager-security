@@ -76,6 +76,9 @@ const CATALOG_BY_CODE = new Map(
 export const agenticCaveat = (code: string): string | null =>
   CATALOG_BY_CODE.get(code)?.caveat ?? null;
 
+export const isAgenticCode = (code: string): boolean =>
+  CATALOG_BY_CODE.has(code);
+
 type ReadFile = (path: string) => string | null;
 
 const MANAGER_VERSION_PATTERN = /^(?<name>[a-z]+)@(?<major>\d+)/u;

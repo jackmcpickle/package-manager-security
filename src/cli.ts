@@ -293,6 +293,7 @@ const modeFromFlags = (
   if (flags.apply || flags.applyAdvisories || flags.applyAgentic) {
     return {
       advisories: flags.applyAdvisories,
+      agenticOnly: flags.applyAgentic && !flags.apply,
       allowMajors: flags.allowMajors,
       kind: "apply",
       settings: flags.apply || flags.applyAgentic,
