@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [0.1.4](https://github.com/jackmcpickle/package-manager-security/compare/v0.1.3...v0.1.4) (2026-08-21)
+
+### Bug Fixes
+
+* **ci:** create GitHub release from publish after tagging ([#6](https://github.com/jackmcpickle/package-manager-security/issues/6)) ([713b38c](https://github.com/jackmcpickle/package-manager-security/commit/713b38cc5e11c2b335303a3359aadfcf9b02b85b))
+* **ci:** retrigger publish after squash commit skipped workflows ([72cafe6](https://github.com/jackmcpickle/package-manager-security/commit/72cafe6158d5f75ea3bc0cee8b6d24029204bdd6))
 ## [0.1.3](https://github.com/jackmcpickle/package-manager-security/compare/v0.1.2...v0.1.3) (2026-08-21)
 ## [0.1.2](https://github.com/jackmcpickle/package-manager-security/compare/v0.1.1...v0.1.2) (2026-08-21)
 ## 0.1.1 (2026-08-21)
