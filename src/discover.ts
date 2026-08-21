@@ -11,6 +11,9 @@ import type {
 import { profileFor } from "./managers/profile";
 import { isPlainObject } from "./std";
 
+const isPlainTable = (value: unknown): value is Record<string, unknown> =>
+  isPlainObject(value) && !(value instanceof Date);
+
 export interface DiscoverFs {
   readDir: (dir: string) => string[];
   readFile: (path: string) => string | null;
@@ -76,7 +79,7 @@ const readPyproject = (dir: string, fs: Fs): Record<string, unknown> | null => {
   }
   try {
     const parsed: unknown = parseToml(raw);
-    return isPlainObject(parsed) ? parsed : null;
+    return isPlainTable(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -88,7 +91,7 @@ const hasToolTable = (dir: string, fs: Fs, name: string): boolean => {
     return false;
   }
   const { tool } = pyproject;
-  return isPlainObject(tool) && isPlainObject(tool[name]);
+  return isPlainTable(tool) && isPlainTable(tool[name]);
 };
 
 const hasToolUv = (dir: string, fs: Fs): boolean => hasToolTable(dir, fs, "uv");
@@ -98,7 +101,7 @@ const hasToolPoetry = (dir: string, fs: Fs): boolean =>
 
 const hasProjectTable = (dir: string, fs: Fs): boolean => {
   const pyproject = readPyproject(dir, fs);
-  return pyproject !== null && isPlainObject(pyproject["project"]);
+  return pyproject !== null && isPlainTable(pyproject["project"]);
 };
 
 const ROOT_PM_FILES = [
@@ -255,7 +258,7 @@ const readPackageJson = (
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    return isPlainObject(parsed) ? parsed : null;
+    return isPlainTable(parsed) ? parsed : null;
   } catch {
     return null;
   }

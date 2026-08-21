@@ -3,10 +3,7 @@ const STAR_PATTERN = /^\*+$/u;
 export const isPlainObject = (
   value: unknown
 ): value is Record<string, unknown> =>
-  typeof value === "object" &&
-  value !== null &&
-  !Array.isArray(value) &&
-  !(value instanceof Date);
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 export const hasText = (value: unknown): value is string =>
   typeof value === "string" && value.trim() !== "";
