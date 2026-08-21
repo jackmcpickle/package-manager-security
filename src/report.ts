@@ -175,6 +175,19 @@ export const formatApplySkipped = (
     .join("");
 };
 
+const dirtyWarningLines = (
+  gitRoot: string,
+  skippedDirty: string[],
+  warnedDirty: Set<string>,
+  color: boolean
+): string[] => {
+  if (!skippedDirty.includes(gitRoot) || warnedDirty.has(gitRoot)) {
+    return [];
+  }
+  warnedDirty.add(gitRoot);
+  return [formatApplySkipped([gitRoot], { color }).trimEnd()];
+};
+
 export const formatHuman = (
   result: AuditResult,
   opts?: { color?: boolean }
@@ -198,6 +211,7 @@ export const formatHuman = (
         `${paint(severity, advisoryCounts[severity] > 0 ? SEVERITY_PAINT[severity] : ANSI.dim, color)} ${advisoryCounts[severity]}`
     ).join(", ")}`,
   ];
+  const warnedDirty = new Set<string>();
   for (const { project, findings: projectFindings } of result.projects) {
     lines.push("", paint(project.root, ANSI.bold, color));
     for (const finding of projectFindings) {
@@ -208,10 +222,15 @@ export const formatHuman = (
     const changes = (result.applyChanges ?? []).filter(
       (change) => change.projectRoot === project.root
     );
-    lines.push(...formatApplyTable(changes, color));
-    if (result.skippedDirty.includes(gitRootOf(project))) {
-      lines.push(formatApplySkipped([gitRootOf(project)], { color }).trimEnd());
-    }
+    lines.push(
+      ...formatApplyTable(changes, color),
+      ...dirtyWarningLines(
+        gitRootOf(project),
+        result.skippedDirty,
+        warnedDirty,
+        color
+      )
+    );
   }
   return `${lines.join("\n")}\n`;
 };

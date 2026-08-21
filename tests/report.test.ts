@@ -221,6 +221,54 @@ test("formatHuman shows apply table and dirty skip after the folder", () => {
   expect(warnAt).toBeGreaterThan(rowAt);
 });
 
+test("formatHuman emits one dirty warning for projects that share a git root", () => {
+  const finding = {
+    code: "scripts.unrestricted",
+    fixable: true,
+    kind: "settings" as const,
+    manager: "npm" as const,
+    message: "npm ignore-scripts must be true",
+    path: "/repo/.npmrc",
+    severity: "high" as const,
+  };
+  const text = formatHuman({
+    applyChanges: [
+      {
+        current: "(unset)",
+        next: "true",
+        projectRoot: "/repo/a",
+        setting: "ignore-scripts",
+        status: "skipped-dirty",
+      },
+      {
+        current: "(unset)",
+        next: "1440",
+        projectRoot: "/repo/b",
+        setting: "minimumReleaseAge",
+        status: "skipped-dirty",
+      },
+    ],
+    exitCode: 2,
+    projects: [
+      {
+        findings: [finding],
+        project: { gitRoot: "/repo", managers: [], root: "/repo/a" },
+      },
+      {
+        findings: [finding],
+        project: { gitRoot: "/repo", managers: [], root: "/repo/b" },
+      },
+    ],
+    skippedDirty: ["/repo"],
+  });
+  expect(text).toContain("/repo/a");
+  expect(text).toContain("/repo/b");
+  expect(text).toContain("Change to");
+  expect(text.match(/apply skipped: dirty git tree at \/repo/gu)).toHaveLength(
+    1
+  );
+});
+
 test("formatHuman marks applied changes in the table and omits the dirty warning", () => {
   const text = formatHuman({
     applyChanges: [
