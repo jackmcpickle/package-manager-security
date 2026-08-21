@@ -46,7 +46,8 @@
     "check:type-aware": "ultracite check --type-aware",
     "fix": "ultracite fix",
     "lint": "ultracite check",
-    "release": "commit-and-tag-version"
+    "release": "commit-and-tag-version",
+    "release:notes": "bun scripts/release-notes.ts"
   },
   "dependencies": {
     "smol-toml": "^1.8.0"
