@@ -1,20 +1,10 @@
 import type { Finding, PackageManager, Project } from "./domain";
+import { profileFor } from "./managers/profile";
 
 export interface Preflight {
   missing: { manager: PackageManager; binary: string }[];
   warnings: Finding[];
 }
-
-const REQUIRED_BINARIES: Partial<Record<PackageManager, string>> = {
-  bun: "bun",
-  bundler: "bundle-audit",
-  cargo: "cargo",
-  composer: "composer",
-  npm: "npm",
-  pnpm: "pnpm",
-  uv: "uv",
-  yarn: "yarn",
-};
 
 export const preflight = (
   project: Project,
@@ -27,7 +17,7 @@ export const preflight = (
     if (manager.role !== "primary") {
       continue;
     }
-    const binary = REQUIRED_BINARIES[manager.name];
+    const { binary } = profileFor(manager.name);
     if (!binary) {
       continue;
     }

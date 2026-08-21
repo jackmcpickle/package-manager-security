@@ -13,6 +13,7 @@ import type {
   Project,
   Severity,
 } from "./domain";
+import { profileFor } from "./managers/profile";
 import { PRESET_DEFAULTS } from "./policy";
 
 export interface SettingsFs {
@@ -57,12 +58,6 @@ const PNPM_LEGACY_BUILD_KEYS = [
   "ignoredBuiltDependencies",
   "ignoreDepScripts",
 ] as const;
-
-const PYTHON_LEGACY_MANAGERS: ReadonlySet<string> = new Set([
-  "poetry",
-  "pip",
-  "pipenv",
-]);
 
 const BUN_AUTO_SCRIPT_VALUES: ReadonlySet<string> = new Set([
   "auto",
@@ -551,9 +546,8 @@ const bunLockfilePresent = (
   ) {
     return true;
   }
-  return (
-    readFile(`${project.root}/bun.lock`) !== null ||
-    readFile(`${project.root}/bun.lockb`) !== null
+  return profileFor("bun").lockfileNames.some(
+    (name) => readFile(`${project.root}/${name}`) !== null
   );
 };
 
@@ -561,10 +555,15 @@ const readUvConfig = (
   project: Project,
   readFile: ReadFile
 ): Record<string, unknown> => {
-  const pyproject = parseToml(readFile(`${project.root}/pyproject.toml`) ?? "");
+  const [uvTomlName, pyprojectName] = profileFor("uv").configNames;
+  const pyproject = parseToml(
+    readFile(`${project.root}/${pyprojectName ?? "pyproject.toml"}`) ?? ""
+  );
   const tool = isPlainObject(pyproject["tool"]) ? pyproject["tool"] : {};
   const toolUv = isPlainObject(tool["uv"]) ? tool["uv"] : {};
-  const uvToml = parseToml(readFile(`${project.root}/uv.toml`) ?? "");
+  const uvToml = parseToml(
+    readFile(`${project.root}/${uvTomlName ?? "uv.toml"}`) ?? ""
+  );
   return { ...toolUv, ...uvToml };
 };
 
@@ -896,7 +895,9 @@ const npmMinAgeFinding = (
 
 const auditNpm: ManagerAuditor = (project, manager, policy, readFile) => {
   const settings = resolveSettings(policy, "npm");
-  const npmrcPath = manager.configPath ?? `${project.root}/.npmrc`;
+  const npmrcPath =
+    manager.configPath ??
+    `${project.root}/${profileFor("npm").configNames[0] ?? ".npmrc"}`;
   const npmrc = parseNpmrc(readFile(npmrcPath) ?? "");
   const manifestRaw = readFile(manager.manifestPath);
   return [
@@ -1251,8 +1252,13 @@ const auditPnpm: ManagerAuditor = (project, manager, policy, readFile) => {
     ...lockfileMissingFinding(
       settings.requireLockfile,
       !lockfileOff &&
-        lockfilePresent(manager, readFile, `${project.root}/pnpm-lock.yaml`),
-      manager.lockfilePath ?? `${project.root}/pnpm-lock.yaml`,
+        lockfilePresent(
+          manager,
+          readFile,
+          `${project.root}/${profileFor("pnpm").lockfileNames[0] ?? "pnpm-lock.yaml"}`
+        ),
+      manager.lockfilePath ??
+        `${project.root}/${profileFor("pnpm").lockfileNames[0] ?? "pnpm-lock.yaml"}`,
       "pnpm-lock.yaml is required",
       "pnpm"
     ),
@@ -1680,9 +1686,10 @@ const readCargoConfig = (
   project: Project,
   readFile: ReadFile
 ): Record<string, unknown> => {
-  const configToml = readFile(`${project.root}/.cargo/config.toml`);
-  const config = readFile(`${project.root}/.cargo/config`);
-  const raw = configToml ?? config ?? "";
+  const raw =
+    profileFor("cargo")
+      .configNames.map((name) => readFile(`${project.root}/${name}`))
+      .find((contents) => contents !== null) ?? "";
   return parseToml(raw);
 };
 
@@ -1958,7 +1965,7 @@ const primaryFindings = (
   policy: Policy,
   readFile: ReadFile
 ): Finding[] => {
-  if (PYTHON_LEGACY_MANAGERS.has(manager.name)) {
+  if (profileFor(manager.name).kind === "python-legacy") {
     return [notUsingUvFinding(manager)];
   }
   if (!policy.enabledManagers.includes(manager.name)) {

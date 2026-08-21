@@ -7,19 +7,10 @@ import type {
   Project,
   Severity,
 } from "./domain";
+import { profileFor } from "./managers/profile";
 
 export type { AdvisoryResult, PackageAdvisory } from "./cache";
 
-const LIVE_MANAGERS = new Set<PackageManager>([
-  "npm",
-  "pnpm",
-  "yarn",
-  "bun",
-  "uv",
-  "cargo",
-  "bundler",
-  "composer",
-]);
 const OSV_MANAGERS = new Set<PackageManager>(["poetry", "pip", "pipenv"]);
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -30,19 +21,8 @@ const incompleteError = (): Error & { incomplete: true } =>
     incomplete: true as const,
   });
 
-const AUDIT_COMMANDS: Partial<Record<PackageManager, readonly string[]>> = {
-  bun: ["bun", "audit", "--json"],
-  bundler: ["bundle-audit", "check", "--format", "json"],
-  cargo: ["cargo", "audit", "--json"],
-  composer: ["composer", "audit", "--format", "json", "--locked"],
-  npm: ["npm", "audit", "--json"],
-  pnpm: ["pnpm", "audit", "--json"],
-  uv: ["uv", "audit", "--output-format", "json", "--frozen"],
-  yarn: ["yarn", "npm", "audit", "--json"],
-};
-
 const auditArgv = (name: PackageManager): string[] | null => {
-  const argv = AUDIT_COMMANDS[name];
+  const argv = profileFor(name).auditArgv;
   return argv ? [...argv] : null;
 };
 
@@ -836,7 +816,7 @@ const isLivePrimary = (
   enabled: PackageManager[]
 ): boolean =>
   manager.role === "primary" &&
-  LIVE_MANAGERS.has(manager.name) &&
+  profileFor(manager.name).kind === "config" &&
   enabled.includes(manager.name);
 
 const isOsvPrimary = (manager: Project["managers"][number]): boolean =>

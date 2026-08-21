@@ -14,6 +14,7 @@ import type {
   Policy,
   Project,
 } from "./domain";
+import { profileFor } from "./managers/profile";
 import { PRESET_DEFAULTS } from "./policy";
 
 export interface ApplyResult {
@@ -647,11 +648,12 @@ const uvConfigPath = (
   manager: DetectedManager,
   readFile: (path: string) => string | null
 ): string => {
-  const uvToml = localPath(project.root, "uv.toml");
+  const [uvTomlName, pyprojectName] = profileFor("uv").configNames;
+  const uvToml = localPath(project.root, uvTomlName ?? "uv.toml");
   if (readFile(uvToml) !== null) {
     return uvToml;
   }
-  const pyproject = localPath(project.root, "pyproject.toml");
+  const pyproject = localPath(project.root, pyprojectName ?? "pyproject.toml");
   if (
     manager.configPath !== null &&
     isInside(manager.configPath, project.root) &&
@@ -666,15 +668,6 @@ const uvConfigPath = (
   return uvToml;
 };
 
-const LOCAL_CONFIG_FILE: Partial<Record<PackageManager, string>> = {
-  bun: "bunfig.toml",
-  bundler: ".bundle/config",
-  composer: "composer.json",
-  npm: ".npmrc",
-  pnpm: "pnpm-workspace.yaml",
-  yarn: ".yarnrc.yml",
-};
-
 const configPathFor = (
   project: Project,
   manager: DetectedManager,
@@ -684,9 +677,15 @@ const configPathFor = (
     return uvConfigPath(project, manager, readFile);
   }
   if (manager.name === "cargo") {
-    return manager.configPath ?? localPath(project.root, ".cargo/config.toml");
+    return (
+      manager.configPath ??
+      localPath(
+        project.root,
+        profileFor("cargo").writeConfigName ?? ".cargo/config.toml"
+      )
+    );
   }
-  const file = LOCAL_CONFIG_FILE[manager.name];
+  const file = profileFor(manager.name).writeConfigName;
   return file ? localPath(project.root, file) : null;
 };
 

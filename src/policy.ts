@@ -1,6 +1,7 @@
 import { parse } from "smol-toml";
 
 import type { PackageManager, Policy, PresetName } from "./domain";
+import { CONFIG_MANAGER_NAMES } from "./managers/profile";
 
 export const PRESET_DEFAULTS = {
   relaxed: {
@@ -26,27 +27,7 @@ export const PRESET_DEFAULTS = {
   },
 } as const;
 
-const DEFAULT_ENABLED_MANAGERS: PackageManager[] = [
-  "npm",
-  "pnpm",
-  "yarn",
-  "bun",
-  "uv",
-  "bundler",
-  "cargo",
-  "composer",
-];
-
-const CONFIG_MANAGERS = new Set<string>([
-  "npm",
-  "pnpm",
-  "yarn",
-  "bun",
-  "uv",
-  "bundler",
-  "cargo",
-  "composer",
-]);
+const CONFIG_MANAGERS = new Set<string>(CONFIG_MANAGER_NAMES);
 
 const PACKAGE_MANAGERS = new Set<string>([
   ...CONFIG_MANAGERS,
@@ -175,7 +156,7 @@ export const loadPolicy = (input: {
   flags?: { preset?: PresetName; overrides?: Record<string, unknown> };
 }): Policy => {
   const state: PolicyState = {
-    enabledManagers: [...DEFAULT_ENABLED_MANAGERS],
+    enabledManagers: [...CONFIG_MANAGER_NAMES],
     overrides: {},
     preset: "standard",
     tables: {},

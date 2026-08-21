@@ -9,6 +9,7 @@ import type {
   PackageManager,
   Project,
 } from "./domain";
+import { profileFor } from "./managers/profile";
 
 export interface DiscoverFs {
   readDir?: (dir: string) => string[];
@@ -453,11 +454,10 @@ const hasBunMarker = (names: Set<string>): boolean =>
   hasBunLock(names) || names.has("bunfig.toml");
 
 const bunLockfilePath = (dir: string, names: Set<string>): string | null => {
-  if (names.has("bun.lock")) {
-    return path.join(dir, "bun.lock");
-  }
-  if (names.has("bun.lockb")) {
-    return path.join(dir, "bun.lockb");
+  for (const name of profileFor("bun").lockfileNames) {
+    if (names.has(name)) {
+      return path.join(dir, name);
+    }
   }
   return null;
 };
@@ -634,11 +634,12 @@ const uvDetectedConfigPath = (
   names: Set<string>,
   toolUv: boolean
 ): string | null => {
-  if (names.has("uv.toml")) {
-    return path.join(dir, "uv.toml");
+  const [uvTomlName, pyprojectName] = profileFor("uv").configNames;
+  if (uvTomlName !== undefined && names.has(uvTomlName)) {
+    return path.join(dir, uvTomlName);
   }
-  if (toolUv) {
-    return path.join(dir, "pyproject.toml");
+  if (toolUv && pyprojectName !== undefined) {
+    return path.join(dir, pyprojectName);
   }
   return null;
 };
@@ -664,15 +665,16 @@ const detectUv = (
 };
 
 const cargoConfigPath = (dir: string, fs: Fs): string => {
-  const configToml = path.join(dir, ".cargo/config.toml");
-  const config = path.join(dir, ".cargo/config");
-  if (fs.readFile(configToml) !== null) {
+  const [configToml, config] = profileFor("cargo").configNames.map((name) =>
+    path.join(dir, name)
+  );
+  if (configToml !== undefined && fs.readFile(configToml) !== null) {
     return configToml;
   }
-  if (fs.readFile(config) !== null) {
+  if (config !== undefined && fs.readFile(config) !== null) {
     return config;
   }
-  return configToml;
+  return configToml ?? path.join(dir, ".cargo/config.toml");
 };
 
 const detectComposer = (

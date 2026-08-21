@@ -1,5 +1,6 @@
 import type { ApplyResult } from "./apply-settings";
 import type { Finding, PackageManager, Policy, Project } from "./domain";
+import { profileFor } from "./managers/profile";
 
 export type ApplyChoice = "settings" | "advisories" | "both" | "skip";
 
@@ -10,7 +11,6 @@ export type ApplyPrompt = (info: {
 }) => ApplyChoice | Promise<ApplyChoice>;
 
 const ADVISORY_KINDS = new Set(["advisory", "deprecated", "quarantine"]);
-const NON_UV_PYTHON = new Set<PackageManager>(["poetry", "pip", "pipenv"]);
 
 interface Candidate {
   name: string;
@@ -194,20 +194,8 @@ const upgradeArgv = (
   name: string,
   fix: string
 ): string[] | null => {
-  switch (manager) {
-    case "npm": {
-      return ["npm", "install", `${name}@${fix}`, "--save-exact"];
-    }
-    case "pnpm": {
-      return ["pnpm", "add", `${name}@${fix}`];
-    }
-    case "uv": {
-      return ["uv", "lock", "--upgrade-package", name];
-    }
-    default: {
-      return null;
-    }
-  }
+  const argv = profileFor(manager).upgradeArgv;
+  return argv ? argv(name, fix) : null;
 };
 
 const findingManager = (
@@ -217,7 +205,7 @@ const findingManager = (
   const manager =
     finding.manager ??
     project.managers.find((row) => row.role === "primary")?.name;
-  if (manager === undefined || NON_UV_PYTHON.has(manager)) {
+  if (manager === undefined || profileFor(manager).kind === "python-legacy") {
     return;
   }
   return manager;
