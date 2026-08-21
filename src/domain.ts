@@ -41,6 +41,25 @@ export interface Project {
   managers: DetectedManager[];
 }
 
+export type ConfigEditValue =
+  | string
+  | number
+  | boolean
+  | readonly string[]
+  | Readonly<Record<string, string | number | boolean>>;
+
+export type ConfigEdit =
+  | { op: "set"; key: string; value: ConfigEditValue }
+  | { op: "unset"; key: string };
+
+export type ConfigFormat = "npmrc" | "yaml" | "toml" | "bundle-config" | "json";
+
+export interface SettingsFix {
+  file: string;
+  format: ConfigFormat;
+  edits: readonly ConfigEdit[];
+}
+
 export interface Finding {
   kind: FindingKind;
   code: string;
@@ -52,6 +71,7 @@ export interface Finding {
   package?: string;
   currentVersion?: string;
   fixVersion?: string;
+  fix?: SettingsFix;
 }
 
 export interface Policy {

@@ -783,6 +783,52 @@ test("bundler BUNDLE_COOLDOWN meeting standard preset is quiet", () => {
   expect(findings.filter((f) => f.kind === "settings")).toEqual([]);
 });
 
+test("npm scripts.unrestricted finding carries an npmrc ignore-scripts fix", () => {
+  const files: Record<string, string> = {
+    "/p/.npmrc": "registry=https://registry.npmjs.org/\n",
+    "/p/package-lock.json": '{"lockfileVersion":3}',
+    "/p/package.json": '{"name":"x"}',
+  };
+  const findings = auditSettings(npmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  const found = findings.find((f) => f.code === "scripts.unrestricted");
+  expect(found?.fix).toEqual({
+    edits: [{ key: "ignore-scripts", op: "set", value: true }],
+    file: "/p/.npmrc",
+    format: "npmrc",
+  });
+});
+
+test("lockfile.missing and pm.unpinned stay fixless", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": '{"name":"x"}',
+  };
+  const findings = auditSettings(npmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(
+    findings.find((f) => f.code === "lockfile.missing")?.fix
+  ).toBeUndefined();
+  expect(findings.find((f) => f.code === "pm.unpinned")?.fix).toBeUndefined();
+});
+
+test("bundler min-age finding carries a BUNDLE_COOLDOWN fix in days", () => {
+  const files: Record<string, string> = {
+    "/r/Gemfile": 'source "https://rubygems.org"\n',
+    "/r/Gemfile.lock": "GEM\n",
+  };
+  const findings = auditSettings(bundlerProject("/r"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  const found = findings.find((f) => f.code === "min-age.disabled");
+  expect(found?.fix).toEqual({
+    edits: [{ key: "BUNDLE_COOLDOWN", op: "set", value: "1" }],
+    file: "/r/.bundle/config",
+    format: "bundle-config",
+  });
+});
+
 test("bundler without Gemfile.lock emits lockfile.missing", () => {
   const project: Project = {
     gitRoot: "/r",

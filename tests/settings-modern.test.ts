@@ -721,3 +721,70 @@ test("apply sets audit malware-check on uv", () => {
   });
   expect(files["/p/pyproject.toml"]).toContain("malware-check = true");
 });
+
+test("pnpm min-age finding carries minutes and legacy migration unsets only present keys", () => {
+  const files = pnpmFiles(
+    "11.7.0",
+    "onlyBuiltDependencies:\n  - esbuild\nneverBuiltDependencies:\n  - core-js\n"
+  );
+  const legacy = find("pnpm", files, "scripts.legacy-config");
+  expect(legacy?.fix).toEqual({
+    edits: [
+      { key: "dangerouslyAllowAllBuilds", op: "set", value: false },
+      { key: "onlyBuiltDependencies", op: "unset" },
+      { key: "neverBuiltDependencies", op: "unset" },
+      {
+        key: "allowBuilds",
+        op: "set",
+        value: { "core-js": false, esbuild: true },
+      },
+    ],
+    file: "/p/pnpm-workspace.yaml",
+    format: "yaml",
+  });
+});
+
+test("yarn min-age finding carries minutes", () => {
+  const files = yarnFiles("3.2.0", "enableScripts: false\n");
+  const found = find("yarn", files, "min-age.disabled");
+  expect(found?.fix).toEqual({
+    edits: [{ key: "npmMinimalAgeGate", op: "set", value: 1440 }],
+    file: "/p/.yarnrc.yml",
+    format: "yaml",
+  });
+});
+
+test("bun min-age finding carries seconds", () => {
+  const files = bunFiles("");
+  const found = find("bun", files, "min-age.disabled");
+  expect(found?.fix).toEqual({
+    edits: [{ key: "install.minimumReleaseAge", op: "set", value: 86_400 }],
+    file: "/p/bunfig.toml",
+    format: "toml",
+  });
+});
+
+test("cargo min-age finding carries a duration string", () => {
+  const files = cargoFiles("");
+  const found = find("cargo", files, "min-age.disabled");
+  expect(found?.fix).toEqual({
+    edits: [{ key: "install.minimum-release-age", op: "set", value: "1d" }],
+    file: "/p/.cargo/config.toml",
+    format: "toml",
+  });
+});
+
+test("uv min-age finding writes the computed path with a dotted key prefix", () => {
+  const files = uvFiles("");
+  const found = find("uv", files, "min-age.disabled");
+  expect(found?.fix?.file).toBe("/p/pyproject.toml");
+  expect(found?.fix?.format).toBe("toml");
+  expect(found?.fix?.edits).toEqual([
+    expect.objectContaining({
+      key: "tool.uv.exclude-newer",
+      op: "set",
+    }),
+  ]);
+  const value = found?.fix?.edits[0];
+  expect(value?.op === "set" ? typeof value.value : "").toBe("string");
+});

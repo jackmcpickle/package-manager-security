@@ -547,6 +547,11 @@ test("applySettings with --commit calls gitCommit exactly once with the repo roo
   };
   const finding: Finding = {
     code: "scripts.unrestricted",
+    fix: {
+      edits: [{ key: "ignore-scripts", op: "set", value: true }],
+      file: "/repo/.npmrc",
+      format: "npmrc",
+    },
     fixable: true,
     kind: "settings",
     manager: "npm",
