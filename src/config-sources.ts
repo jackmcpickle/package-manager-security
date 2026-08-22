@@ -8,6 +8,14 @@ export interface ConfigSource {
 const SEARCH_ORDER =
   "Looks for a user/tool config, then .mailclad.toml in the scan directory and each project. Closer wins; flags win over files.";
 
+const ANSI = {
+  dim: "\u001B[2m",
+  reset: "\u001B[0m",
+};
+
+const paint = (text: string, code: string, on: boolean): string =>
+  on ? `${code}${text}${ANSI.reset}` : text;
+
 const padEnd = (text: string, width: number): string =>
   text.length >= width ? text : `${text}${" ".repeat(width - text.length)}`;
 
@@ -23,13 +31,27 @@ const colWidth = (cells: readonly string[]): number => {
 
 export const formatConfigSources = (
   sources: readonly ConfigSource[],
-  readFile: (filePath: string) => string | null
+  readFile: (filePath: string) => string | null,
+  opts?: { color?: boolean }
 ): string => {
-  const kindWidth = colWidth(sources.map((source) => source.kind));
-  const pathWidth = colWidth(sources.map((source) => source.path));
+  const color = opts?.color ?? false;
+  const headers = ["Kind", "Path", "Status"] as const;
   const rows = sources.map((source) => {
     const status = readFile(source.path) === null ? "missing" : "found";
-    return `  ${padEnd(source.kind, kindWidth)}  ${padEnd(source.path, pathWidth)}  ${status}`;
+    return [source.kind, source.path, status] as const;
   });
-  return ["Configuration:", `  ${SEARCH_ORDER}`, "", ...rows, ""].join("\n");
+  const widths = headers.map((header, index) =>
+    colWidth([header, ...rows.map((row) => row[index] ?? "")])
+  );
+  const line = (cells: readonly string[]): string =>
+    `  ${cells.map((cell, index) => padEnd(cell, widths[index] ?? 0)).join("  ")}`;
+  const body = [
+    paint("Configuration:", ANSI.dim, color),
+    paint(`  ${SEARCH_ORDER}`, ANSI.dim, color),
+    "",
+    paint(line(headers), ANSI.dim, color),
+    ...rows.map((row) => paint(line(row), ANSI.dim, color)),
+    "",
+  ].join("\n");
+  return body;
 };

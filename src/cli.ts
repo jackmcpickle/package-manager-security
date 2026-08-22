@@ -354,8 +354,10 @@ const helpConfigSources = (host: Host): ConfigSource[] => [
   { kind: "scan", path: dirConfigPath(host.cwd()) },
 ];
 
-const withHelpConfig = (text: string, host: Host): string =>
-  `${text}${formatConfigSources(helpConfigSources(host), host.files.readFile)}`;
+const withHelpConfig = (text: string, host: Host, color: boolean): string =>
+  `${text}${formatConfigSources(helpConfigSources(host), host.files.readFile, {
+    color,
+  })}`;
 
 const helpForCommand = (
   name: string,
@@ -365,12 +367,12 @@ const helpForCommand = (
   const command = commandByName(name);
   if (command === undefined) {
     return writeUsageError(
-      withHelpConfig(formatUnknownCommand(name, color), host),
+      withHelpConfig(formatUnknownCommand(name, color), host, color),
       host.stderr
     );
   }
   const body = formatCommandHelp(command, color);
-  const text = name === "audit" ? withHelpConfig(body, host) : body;
+  const text = name === "audit" ? withHelpConfig(body, host, color) : body;
   return writeHelp(text, host.stdout);
 };
 
@@ -387,7 +389,10 @@ const dispatchExplicitHelp = (
   if (head === "help" && rest.some(isHelpFlag)) {
     return helpForCommand("help", color, host);
   }
-  return writeHelp(withHelpConfig(formatRootHelp(color), host), host.stdout);
+  return writeHelp(
+    withHelpConfig(formatRootHelp(color), host, color),
+    host.stdout
+  );
 };
 
 const dispatchTrailingHelp = (
@@ -487,7 +492,8 @@ const emitConfigSources = (
   result: AuditResult,
   env: Record<string, string | undefined>,
   root: string,
-  host: Host
+  host: Host,
+  color: boolean
 ): void => {
   const block = formatConfigSources(
     auditConfigSources(
@@ -495,7 +501,8 @@ const emitConfigSources = (
       root,
       result.projects.map(({ project }) => project.root)
     ),
-    host.files.readFile
+    host.files.readFile,
+    { color }
   );
   if (flags.json || flags.sarif) {
     host.stderr(block);
@@ -543,7 +550,7 @@ const runAudit = async (
     noCache: flags.noCache,
     refresh: flags.refresh,
   });
-  emitConfigSources(flags, result, env, root, host);
+  emitConfigSources(flags, result, env, root, host, color);
   emitOutput(flags, result, host, cwd, color);
   return { exitCode: result.exitCode };
 };
