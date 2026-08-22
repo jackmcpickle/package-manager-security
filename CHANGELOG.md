@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [0.1.6](https://github.com/jackmcpickle/package-manager-security/compare/v0.1.5...v0.1.6) (2026-08-22)
+
+### Features
+
+* company registry config and agentic settings warnings ([#8](https://github.com/jackmcpickle/package-manager-security/issues/8)) ([6d95337](https://github.com/jackmcpickle/package-manager-security/commit/6d95337bf626aab35da8ea29885280ec3d7c863f))
 ## [0.1.5](https://github.com/jackmcpickle/package-manager-security/compare/v0.1.4...v0.1.5) (2026-08-21)
 
 ### Features
