@@ -565,7 +565,7 @@ export const run = async (
   const [head, ...rest] = argv;
   if (head === undefined) {
     return writeUsageError(
-      withHelpConfig(formatRootHelp(color), host),
+      withHelpConfig(formatRootHelp(color), host, color),
       host.stderr
     );
   }
@@ -578,7 +578,7 @@ export const run = async (
   }
   if (head !== "audit") {
     return writeUsageError(
-      withHelpConfig(formatUnknownCommand(head, color), host),
+      withHelpConfig(formatUnknownCommand(head, color), host, color),
       host.stderr
     );
   }
