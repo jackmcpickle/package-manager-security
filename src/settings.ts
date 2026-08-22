@@ -86,6 +86,11 @@ const textUrl = (value: unknown): string | null =>
 
 const MINUTES_PER_DAY = 24 * 60;
 
+const TRUST_POLICY_IGNORE_AFTER_DAYS = 90;
+
+const TRUST_POLICY_IGNORE_AFTER_MINUTES =
+  TRUST_POLICY_IGNORE_AFTER_DAYS * MINUTES_PER_DAY;
+
 const SECONDS_PER_DAY = 86_400;
 
 const MS_PER_DAY = 86_400_000;
@@ -1286,32 +1291,41 @@ const pnpmExoticFinding = (
   return [];
 };
 
+const pnpmAuditLevel = (yaml: Record<string, unknown>): unknown => {
+  const { audit } = yaml;
+  if (isPlainObject(audit)) {
+    return audit["level"];
+  }
+  return yaml["auditLevel"] ?? yaml["audit-level"];
+};
+
 const pnpmAuditFinding = (
   yaml: Record<string, unknown>,
   settings: ResolvedSettings,
   yamlPath: string,
-  file: string
+  file: string,
+  version: ManagerVersion | null
 ): Finding[] => {
-  if (
-    auditMeetsGate(
-      isTruthy(yaml["audit"]),
-      yaml["auditLevel"] ?? yaml["audit-level"],
-      settings.auditLevel
-    )
-  ) {
+  if (auditMeetsGate(false, pnpmAuditLevel(yaml), settings.auditLevel)) {
     return [];
   }
+  const modern = atLeastOrUnknown(version, 11, 16);
   return [
     setting(
       "audit.disabled",
-      "pnpm audit must be enabled at the preset gate",
+      modern
+        ? "pnpm audit.level must meet the preset gate"
+        : "pnpm auditLevel must meet the preset gate",
       "high",
       yamlPath,
       "pnpm",
-      configFix(file, "yaml", [
-        setOp("audit", true),
-        setOp("auditLevel", settings.auditLevel),
-      ])
+      configFix(
+        file,
+        "yaml",
+        modern
+          ? [setOp("audit.level", settings.auditLevel)]
+          : [setOp("auditLevel", settings.auditLevel)]
+      )
     ),
   ];
 };
@@ -1394,6 +1408,38 @@ const pnpmMissingTimeFinding = (
     ];
   }
   return [];
+};
+
+const pnpmIgnoreAfterMinutes = (yaml: Record<string, unknown>): number | null =>
+  parseNumber(
+    yaml["trustPolicyIgnoreAfter"] ?? yaml["trust-policy-ignore-after"]
+  );
+
+const pnpmTrustIgnoreAfterFinding = (
+  yaml: Record<string, unknown>,
+  yamlPath: string,
+  version: ManagerVersion | null,
+  file: string
+): Finding[] => {
+  if (!atLeastOrUnknown(version, 10, 27)) {
+    return [];
+  }
+  const minutes = pnpmIgnoreAfterMinutes(yaml);
+  if (minutes !== null && minutes >= TRUST_POLICY_IGNORE_AFTER_MINUTES) {
+    return [];
+  }
+  return [
+    setting(
+      "provenance.ignore-after",
+      `pnpm trustPolicyIgnoreAfter must be at least ${TRUST_POLICY_IGNORE_AFTER_MINUTES} minutes (90 days)`,
+      "high",
+      yamlPath,
+      "pnpm",
+      configFix(file, "yaml", [
+        setOp("trustPolicyIgnoreAfter", TRUST_POLICY_IGNORE_AFTER_MINUTES),
+      ])
+    ),
+  ];
 };
 
 const pnpmTrustPolicyFinding = (
@@ -1532,7 +1578,8 @@ const auditPnpm: ManagerAuditor = (project, manager, policy, readFile) => {
       "pnpm-lock.yaml is required",
       "pnpm"
     ),
-    ...pnpmAuditFinding(yaml, settings, yamlPath, file),
+    ...pnpmAuditFinding(yaml, settings, yamlPath, file, version),
+    ...pnpmTrustIgnoreAfterFinding(yaml, yamlPath, version, file),
     ...pnpmMinAgeFindings(
       settings,
       yaml,

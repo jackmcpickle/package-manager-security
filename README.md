@@ -117,7 +117,9 @@ Manager-specific checks beyond the baseline:
 | npm | `allow-file`, `allow-directory` | must not be `all` (blocks local-path deps) |
 | npm | `allow-scripts-pin` | must be `true` when scripts are restricted |
 | npm | `dangerously-allow-all-scripts` | must not be `true` |
+| pnpm | `audit.level` | must meet the preset gate (pnpm ≥ 11.16; not boolean `audit: true`) |
 | pnpm | `trust-policy` | must be `no-downgrade` (pnpm ≥ 10.21) |
+| pnpm | `trustPolicyIgnoreAfter` | at least 90 days / 129600 minutes (pnpm ≥ 10.27) |
 | pnpm | `trust-lockfile` | must not be `true` |
 | pnpm | `verify-deps-before-run` | must be `error` (pnpm ≥ 10.12) |
 | yarn | `approvedGitRepositories` | must block git-sourced deps (yarn ≥ 4.14) |

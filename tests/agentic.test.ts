@@ -67,7 +67,7 @@ const pnpmSecure = (
 ) => ({
   "/p/package.json": manifest,
   "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
-  "/p/pnpm-workspace.yaml": `registry: "https://registry.npmjs.org/"\naudit: true\nauditLevel: high\ntrustPolicy: no-downgrade\nverifyDepsBeforeRun: error\nminimumReleaseAge: 1440\nallowBuilds: {}\n${yaml}`,
+  "/p/pnpm-workspace.yaml": `registry: "https://registry.npmjs.org/"\naudit:\n  level: high\ntrustPolicy: no-downgrade\ntrustPolicyIgnoreAfter: 129600\nverifyDepsBeforeRun: error\nminimumReleaseAge: 1440\nallowBuilds: {}\n${yaml}`,
 });
 
 const yarnSecure = (

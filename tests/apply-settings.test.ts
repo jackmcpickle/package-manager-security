@@ -1205,6 +1205,28 @@ test("synthetic npmrc fix writes ignore-scripts like a real npm finding", () => 
   expect(files["/p/.npmrc"]).toContain("registry=https://registry.npmjs.org/");
 });
 
+test("yaml apply quotes override keys that contain @ or range markers", () => {
+  const files: Record<string, string> = {
+    "/p/pnpm-workspace.yaml":
+      'packages:\n  - "."\noverrides:\n  "@fastify/static@<10.1.2": ">=10.1.2"\n  "file-type@<21.3.1": ">=21.3.1"\n',
+  };
+  applyFix(files, {
+    edits: [{ key: "trustPolicy", op: "set", value: "no-downgrade" }],
+    file: "/p/pnpm-workspace.yaml",
+    format: "yaml",
+  });
+  const written = files["/p/pnpm-workspace.yaml"] ?? "";
+  expect(written).toContain('"@fastify/static@<10.1.2"');
+  expect(written).toContain('"file-type@<21.3.1"');
+  expect(Bun.YAML.parse(written)).toMatchObject({
+    overrides: {
+      "@fastify/static@<10.1.2": ">=10.1.2",
+      "file-type@<21.3.1": ">=21.3.1",
+    },
+    trustPolicy: "no-downgrade",
+  });
+});
+
 test("synthetic yaml fix writes pnpm minimumReleaseAge as 1440 minutes", () => {
   const files: Record<string, string> = {
     "/p/pnpm-workspace.yaml": "packages:\n  - '.'\n",

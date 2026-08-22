@@ -65,13 +65,13 @@ const find = (
   }).find((f) => f.code === code);
 
 const pnpmSecureBaseline =
-  "trustPolicy: no-downgrade\nverifyDepsBeforeRun: error\n";
+  "trustPolicy: no-downgrade\ntrustPolicyIgnoreAfter: 129600\nverifyDepsBeforeRun: error\n";
 
 /** A pnpm project whose only interesting content is the workspace yaml. */
 const pnpmFiles = (version: string, yaml: string): Record<string, string> => ({
   "/p/package.json": `{"name":"x","packageManager":"pnpm@${version}"}`,
   "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
-  "/p/pnpm-workspace.yaml": `registry: "https://registry.npmjs.org/"\naudit: true\nauditLevel: high\n${pnpmSecureBaseline}${yaml}`,
+  "/p/pnpm-workspace.yaml": `registry: "https://registry.npmjs.org/"\naudit:\n  level: high\n${pnpmSecureBaseline}${yaml}`,
 });
 
 /** Like pnpmFiles but without the mailclad security baseline — for gap tests. */
@@ -81,7 +81,7 @@ const pnpmFilesInsecure = (
 ): Record<string, string> => ({
   "/p/package.json": `{"name":"x","packageManager":"pnpm@${version}"}`,
   "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
-  "/p/pnpm-workspace.yaml": `registry: "https://registry.npmjs.org/"\naudit: true\nauditLevel: high\nminimumReleaseAge: 1440\nallowBuilds: {}\n${yaml}`,
+  "/p/pnpm-workspace.yaml": `registry: "https://registry.npmjs.org/"\naudit:\n  level: high\nminimumReleaseAge: 1440\nallowBuilds: {}\n${yaml}`,
 });
 
 const yarnFiles = (version: string, yaml: string): Record<string, string> => ({
@@ -230,6 +230,78 @@ test("apply writes pnpm mailclad security keys", () => {
   expect(written).toContain("trustPolicy: no-downgrade");
   expect(written).toContain("trustLockfile: false");
   expect(written).toContain("verifyDepsBeforeRun: error");
+  expect(written).toContain("trustPolicyIgnoreAfter: 129600");
+});
+
+test("pnpm boolean audit: true without a level is audit.disabled", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"pnpm@11.16.0"}`,
+    "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "/p/pnpm-workspace.yaml":
+      "registry: https://registry.npmjs.org/\naudit: true\nminimumReleaseAge: 1440\nallowBuilds: {}\ntrustPolicy: no-downgrade\ntrustPolicyIgnoreAfter: 129600\nverifyDepsBeforeRun: error\n",
+  };
+  expect(codes("pnpm", files)).toContain("audit.disabled");
+});
+
+test("pnpm audit.level meeting the gate is quiet", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"pnpm@11.16.0"}`,
+    "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "/p/pnpm-workspace.yaml":
+      "registry: https://registry.npmjs.org/\naudit:\n  level: high\nminimumReleaseAge: 1440\nallowBuilds: {}\ntrustPolicy: no-downgrade\ntrustPolicyIgnoreAfter: 129600\nverifyDepsBeforeRun: error\n",
+  };
+  expect(codes("pnpm", files)).not.toContain("audit.disabled");
+});
+
+test("pnpm apply writes audit.level instead of boolean audit", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"pnpm@11.16.0"}`,
+    "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "/p/pnpm-workspace.yaml":
+      "registry: https://registry.npmjs.org/\nminimumReleaseAge: 1440\nallowBuilds: {}\ntrustPolicy: no-downgrade\ntrustPolicyIgnoreAfter: 129600\nverifyDepsBeforeRun: error\n",
+  };
+  const target = project("pnpm");
+  const findings = auditSettings(target, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  applySettings(target, findings, loadPolicy({}), {
+    commit: false,
+    force: false,
+    gitStatus: () => "clean",
+    readFile: (p) => files[p] ?? null,
+    writeFile: (p, b) => {
+      files[p] = b;
+    },
+  });
+  const written = files["/p/pnpm-workspace.yaml"] ?? "";
+  expect(written).toContain("level: high");
+  expect(written).not.toContain("audit: true");
+});
+
+test("pnpm 11 flags missing trustPolicyIgnoreAfter", () => {
+  const files = pnpmFilesInsecure("11.7.0", "trustPolicy: no-downgrade\n");
+  expect(codes("pnpm", files)).toContain("provenance.ignore-after");
+});
+
+test("pnpm 10.26 skips trustPolicyIgnoreAfter", () => {
+  const files = pnpmFilesInsecure("10.26.0", "trustPolicy: no-downgrade\n");
+  expect(codes("pnpm", files)).not.toContain("provenance.ignore-after");
+});
+
+test("pnpm trustPolicyIgnoreAfter below 90 days is flagged", () => {
+  const files = pnpmFilesInsecure(
+    "11.7.0",
+    "trustPolicy: no-downgrade\ntrustPolicyIgnoreAfter: 1440\n"
+  );
+  expect(codes("pnpm", files)).toContain("provenance.ignore-after");
+});
+
+test("pnpm trustPolicyIgnoreAfter of 90 days is quiet", () => {
+  const files = pnpmFilesInsecure(
+    "11.7.0",
+    "trustPolicy: no-downgrade\ntrustPolicyIgnoreAfter: 129600\n"
+  );
+  expect(codes("pnpm", files)).not.toContain("provenance.ignore-after");
 });
 
 // --- release-age gates ------------------------------------------------------
