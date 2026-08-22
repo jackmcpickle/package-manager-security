@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [0.1.7](https://github.com/jackmcpickle/package-manager-security/compare/v0.1.6...v0.1.7) (2026-08-22)
+
+### Bug Fixes
+
+* **pnpm:** audit.level, 90-day ignoreAfter, and quoted YAML keys ([#9](https://github.com/jackmcpickle/package-manager-security/issues/9)) ([b05e79c](https://github.com/jackmcpickle/package-manager-security/commit/b05e79c82d0fbac5b36a60447a05001b2a691733))
 ## [0.1.6](https://github.com/jackmcpickle/package-manager-security/compare/v0.1.5...v0.1.6) (2026-08-22)
 
 ### Features
