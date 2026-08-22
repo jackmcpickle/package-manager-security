@@ -263,6 +263,66 @@ const notUsingUvFinding = (manager: DetectedManager): Finding => ({
   severity: "high",
 });
 
+const NODE_MANAGERS = new Set<PackageManager>(["npm", "pnpm", "yarn", "bun"]);
+const PYTHON_MANAGERS = new Set<PackageManager>([
+  "uv",
+  "poetry",
+  "pip",
+  "pipenv",
+]);
+
+interface EcosystemRule {
+  code: string;
+  label: string;
+  managers: Set<PackageManager>;
+}
+
+const ECOSYSTEM_RULES: readonly EcosystemRule[] = [
+  { code: "pm.multiple-node", label: "node", managers: NODE_MANAGERS },
+  { code: "pm.multiple-python", label: "python", managers: PYTHON_MANAGERS },
+];
+
+const primaryIn = (
+  managers: readonly DetectedManager[]
+): DetectedManager | undefined =>
+  managers.find((manager) => manager.role === "primary") ?? managers[0];
+
+const multiplePmFinding = (
+  rule: EcosystemRule,
+  present: DetectedManager[]
+): Finding | null => {
+  const primary = primaryIn(present);
+  if (primary === undefined) {
+    return null;
+  }
+  const names = present.map((manager) => manager.name).join(", ");
+  return {
+    code: rule.code,
+    fixable: false,
+    kind: "settings",
+    message: `Multiple ${rule.label} package managers in use: ${names}`,
+    path: primary.manifestPath,
+    severity: "high",
+  };
+};
+
+const multiplePmFindings = (project: Project): Finding[] => {
+  const findings: Finding[] = [];
+  for (const rule of ECOSYSTEM_RULES) {
+    const present = project.managers.filter((manager) =>
+      rule.managers.has(manager.name)
+    );
+    if (present.length < 2) {
+      continue;
+    }
+    const finding = multiplePmFinding(rule, present);
+    if (finding !== null) {
+      findings.push(finding);
+    }
+  }
+  return findings;
+};
+
 const joinRoot = (root: string, name: string): string =>
   root.endsWith("/") ? `${root}${name}` : `${root}/${name}`;
 
@@ -686,18 +746,18 @@ const uvConfigPath = (
   return uvToml;
 };
 
+const isUvTomlRoot = (table: Record<string, unknown>): boolean =>
+  table["exclude-newer"] !== undefined || table["index-strategy"] !== undefined;
+
+const isPyprojectUv = (table: Record<string, unknown>): boolean =>
+  isPlainObject(table.tool) || table.project !== undefined;
+
 const uvKeyPrefix = (raw: string): string => {
   const table = parseToml(raw);
-  if (
-    table["exclude-newer"] !== undefined ||
-    table["index-strategy"] !== undefined
-  ) {
+  if (isUvTomlRoot(table)) {
     return "";
   }
-  if (isPlainObject(table.tool) || table.project !== undefined) {
-    return "tool.uv.";
-  }
-  return "";
+  return isPyprojectUv(table) ? "tool.uv." : "";
 };
 
 /** Returns null when the value is not a timestamp and other parses apply. */
@@ -2477,7 +2537,10 @@ export const auditSettings = (
   opts: SettingsFs
 ): Finding[] => {
   const { readFile } = opts;
-  return project.managers.flatMap((manager) =>
-    managerFindings(project, manager, policy, readFile)
-  );
+  return [
+    ...multiplePmFindings(project),
+    ...project.managers.flatMap((manager) =>
+      managerFindings(project, manager, policy, readFile)
+    ),
+  ];
 };

@@ -792,6 +792,139 @@ test("bun install.registry.url that differs from config emits registry.mismatch"
   expect(findings.some((f) => f.code === "registry.mismatch")).toBe(true);
 });
 
+test("multiple node package managers emit pm.multiple-node", () => {
+  const project: Project = {
+    gitRoot: "/p",
+    managers: [
+      {
+        configPath: "/p/.npmrc",
+        lockfilePath: "/p/package-lock.json",
+        manifestPath: "/p/package.json",
+        name: "npm",
+        role: "primary",
+      },
+      {
+        configPath: null,
+        lockfilePath: "/p/yarn.lock",
+        manifestPath: "/p/package.json",
+        name: "yarn",
+        role: "leftover",
+      },
+      {
+        configPath: null,
+        lockfilePath: "/p/bun.lock",
+        manifestPath: "/p/package.json",
+        name: "bun",
+        role: "leftover",
+      },
+    ],
+    root: "/p",
+  };
+  const files: Record<string, string> = {
+    "/p/.npmrc": validNpmrc,
+    "/p/bun.lock": "{}\n",
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+    "/p/yarn.lock": "# yarn\n",
+  };
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.find((f) => f.code === "pm.multiple-node")).toEqual(
+    expect.objectContaining({
+      fixable: false,
+      message: "Multiple node package managers in use: npm, yarn, bun",
+      severity: "high",
+    })
+  );
+});
+
+test("multiple python package managers emit pm.multiple-python", () => {
+  const project: Project = {
+    gitRoot: "/p",
+    managers: [
+      {
+        configPath: "/p/uv.toml",
+        lockfilePath: "/p/uv.lock",
+        manifestPath: "/p/pyproject.toml",
+        name: "uv",
+        role: "primary",
+      },
+      {
+        configPath: null,
+        lockfilePath: "/p/poetry.lock",
+        manifestPath: "/p/pyproject.toml",
+        name: "poetry",
+        role: "leftover",
+      },
+    ],
+    root: "/p",
+  };
+  const files: Record<string, string> = {
+    "/p/poetry.lock": "# poetry\n",
+    "/p/pyproject.toml": `[project]\nname = "x"\n[tool.uv]\nexclude-newer = "30d"\n`,
+    "/p/uv.lock": "version = 1\n",
+    "/p/uv.toml": `exclude-newer = "30d"\n`,
+  };
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.find((f) => f.code === "pm.multiple-python")).toEqual(
+    expect.objectContaining({
+      fixable: false,
+      message: "Multiple python package managers in use: uv, poetry",
+      severity: "high",
+    })
+  );
+});
+
+test("a single node or python manager does not emit pm.multiple findings", () => {
+  const files: Record<string, string> = {
+    "/p/.npmrc": validNpmrc,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+  };
+  const findings = auditSettings(npmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code.startsWith("pm.multiple-"))).toBe(false);
+});
+
+test("npm and uv primaries in one root do not emit pm.multiple findings", () => {
+  const project: Project = {
+    gitRoot: "/p",
+    managers: [
+      {
+        configPath: "/p/.npmrc",
+        lockfilePath: "/p/package-lock.json",
+        manifestPath: "/p/package.json",
+        name: "npm",
+        role: "primary",
+      },
+      {
+        configPath: "/p/uv.toml",
+        lockfilePath: "/p/uv.lock",
+        manifestPath: "/p/pyproject.toml",
+        name: "uv",
+        role: "primary",
+      },
+    ],
+    root: "/p",
+  };
+  const files: Record<string, string> = {
+    "/p/.npmrc": validNpmrc,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+    "/p/pyproject.toml": `[project]\nname = "x"\n[tool.uv]\nexclude-newer = "30d"\n`,
+    "/p/uv.lock": "version = 1\n",
+    "/p/uv.toml": `exclude-newer = "30d"\n`,
+  };
+  const findings = auditSettings(project, loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code.startsWith("pm.multiple-"))).toBe(false);
+});
+
 test("leftover yarn bun and uv lockfiles are high and not fixable", () => {
   const project: Project = {
     gitRoot: "/p",

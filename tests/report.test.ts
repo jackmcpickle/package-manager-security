@@ -9,12 +9,22 @@ import {
   formatSarif,
 } from "../src/report";
 
+const npmProject = (root = "/p"): Project => ({
+  gitRoot: root,
+  managers: [
+    {
+      configPath: `${root}/.npmrc`,
+      lockfilePath: `${root}/package-lock.json`,
+      manifestPath: `${root}/package.json`,
+      name: "npm",
+      role: "primary",
+    },
+  ],
+  root,
+});
+
 test("formatHuman includes repos scanned, settings findings count, and warnings count", () => {
-  const project: Project = {
-    gitRoot: "/p",
-    managers: [],
-    root: "/p",
-  };
+  const project = npmProject();
   const text = formatHuman({
     exitCode: 1,
     projects: [
@@ -48,6 +58,10 @@ test("formatHuman includes repos scanned, settings findings count, and warnings 
   expect(text).toContain("settings findings");
   expect(text).toContain("warnings");
   expect(text).toContain("scripts.unrestricted");
+  expect(text).toContain("Code");
+  expect(text).toContain("Severity");
+  expect(text).toContain("Message");
+  expect(text).toContain("npm (primary)");
 });
 
 test("formatHuman prints the catalog caveat under an agentic finding", () => {
@@ -67,7 +81,7 @@ test("formatHuman prints the catalog caveat under an agentic finding", () => {
             severity: "info",
           },
         ],
-        project: { gitRoot: "/p", managers: [], root: "/p" },
+        project: npmProject(),
       },
     ],
     skippedDirty: [],
@@ -93,7 +107,7 @@ test("formatMarkdown prints the catalog caveat under an agentic finding", () => 
             severity: "info",
           },
         ],
-        project: { gitRoot: "/p", managers: [], root: "/p" },
+        project: npmProject(),
       },
     ],
     skippedDirty: [],
@@ -154,7 +168,7 @@ test("formatHuman counts advisories by severity separately from settings", () =>
             severity: "high",
           },
         ],
-        project: { gitRoot: "/p", managers: [], root: "/p" },
+        project: npmProject(),
       },
     ],
     skippedDirty: [],
@@ -179,11 +193,71 @@ const sampleResult: AuditResult = {
           severity: "high",
         },
       ],
-      project: { gitRoot: "/p", managers: [], root: "/p" },
+      project: npmProject(),
     },
   ],
   skippedDirty: [],
 };
+
+test("formatHuman groups findings by package manager within a project", () => {
+  const text = formatHuman({
+    exitCode: 1,
+    projects: [
+      {
+        findings: [
+          {
+            code: "scripts.unrestricted",
+            fixable: true,
+            kind: "settings",
+            manager: "npm",
+            message: "npm ignore-scripts must be true",
+            path: "/p/.npmrc",
+            severity: "high",
+          },
+          {
+            code: "lockfile.leftover",
+            fixable: false,
+            kind: "leftover-lockfile",
+            manager: "yarn",
+            message: "Leftover yarn lockfile is not an apply target",
+            path: "/p/yarn.lock",
+            severity: "high",
+          },
+        ],
+        project: {
+          gitRoot: "/p",
+          managers: [
+            {
+              configPath: "/p/.npmrc",
+              lockfilePath: "/p/package-lock.json",
+              manifestPath: "/p/package.json",
+              name: "npm",
+              role: "primary",
+            },
+            {
+              configPath: null,
+              lockfilePath: "/p/yarn.lock",
+              manifestPath: "/p/package.json",
+              name: "yarn",
+              role: "leftover",
+            },
+          ],
+          root: "/p",
+        },
+      },
+    ],
+    skippedDirty: [],
+  });
+  const npmAt = text.indexOf("npm (primary)");
+  const yarnAt = text.indexOf("yarn (leftover)");
+  const npmFindingAt = text.indexOf("scripts.unrestricted");
+  const yarnFindingAt = text.indexOf("lockfile.leftover");
+  expect(npmAt).toBeGreaterThan(-1);
+  expect(yarnAt).toBeGreaterThan(npmAt);
+  expect(npmFindingAt).toBeGreaterThan(npmAt);
+  expect(yarnFindingAt).toBeGreaterThan(yarnAt);
+  expect(npmFindingAt).toBeLessThan(yarnAt);
+});
 
 test("format json and markdown include finding codes", () => {
   const json = formatJson(sampleResult);
@@ -213,7 +287,7 @@ test("formatJson omits finding.fix from the serialized report", () => {
             severity: "high",
           },
         ],
-        project: { gitRoot: "/p", managers: [], root: "/p" },
+        project: npmProject(),
       },
     ],
     skippedDirty: [],

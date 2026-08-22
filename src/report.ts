@@ -2,7 +2,7 @@ import { agenticCaveat } from "./agentic";
 import { APP_NAME } from "./app-name";
 import type { ApplyChange, AuditResult } from "./audit";
 import { gitRootOf, isAdvisoryKind } from "./domain";
-import type { Finding, Severity } from "./domain";
+import type { Finding, PackageManager, Project, Severity } from "./domain";
 
 const SEVERITIES: Severity[] = ["critical", "high", "moderate", "low", "info"];
 
@@ -141,6 +141,149 @@ const colWidth = (cells: readonly string[]): number => {
   return width;
 };
 
+const formatTable = (
+  headers: readonly string[],
+  rows: readonly (readonly string[])[],
+  color: boolean,
+  paintRow?: (cells: readonly string[], index: number) => readonly string[]
+): string[] => {
+  if (rows.length === 0) {
+    return [];
+  }
+  const widths = headers.map((header, index) =>
+    colWidth([header, ...rows.map((row) => row[index] ?? "")])
+  );
+  const line = (cells: readonly string[]): string =>
+    `  ${cells.map((cell, index) => padEnd(cell, widths[index] ?? 0)).join("  ")}`;
+  return [
+    paint(line(headers), ANSI.bold, color),
+    ...rows.map((row, index) =>
+      line(paintRow ? (paintRow(row, index) ?? row) : row)
+    ),
+  ];
+};
+
+const managerLabel = (name: PackageManager, project: Project): string => {
+  const manager = project.managers.find((row) => row.name === name);
+  return manager === undefined ? name : `${name} (${manager.role})`;
+};
+
+const indexFindingsByManager = (
+  findings: Finding[]
+): { byManager: Map<PackageManager, Finding[]>; ungrouped: Finding[] } => {
+  const byManager = new Map<PackageManager, Finding[]>();
+  const ungrouped: Finding[] = [];
+  for (const finding of findings) {
+    if (finding.manager === undefined) {
+      ungrouped.push(finding);
+      continue;
+    }
+    const list = byManager.get(finding.manager) ?? [];
+    list.push(finding);
+    byManager.set(finding.manager, list);
+  }
+  return { byManager, ungrouped };
+};
+
+const managerGroups = (
+  findings: Finding[],
+  project: Project
+): { label: string; findings: Finding[] }[] => {
+  const { byManager, ungrouped } = indexFindingsByManager(findings);
+  const groups: { label: string; findings: Finding[] }[] = [];
+  const seen = new Set<PackageManager>();
+  for (const manager of project.managers) {
+    const list = byManager.get(manager.name);
+    if (list === undefined || list.length === 0) {
+      continue;
+    }
+    groups.push({
+      findings: list,
+      label: `${manager.name} (${manager.role})`,
+    });
+    seen.add(manager.name);
+  }
+  for (const [name, list] of byManager) {
+    if (seen.has(name)) {
+      continue;
+    }
+    groups.push({ findings: list, label: managerLabel(name, project) });
+  }
+  if (ungrouped.length > 0) {
+    groups.push({ findings: ungrouped, label: "other" });
+  }
+  return groups;
+};
+
+const paintFindingCells = (
+  cells: readonly string[],
+  finding: Finding,
+  color: boolean
+): readonly string[] => [
+  paint(cells[0] ?? "", ANSI.cyan, color),
+  paint(cells[1] ?? "", SEVERITY_PAINT[finding.severity], color),
+  cells[2] ?? "",
+];
+
+const caveatLines = (
+  findings: Finding[],
+  rows: readonly (readonly string[])[],
+  color: boolean
+): string[] => {
+  const codeWidth = colWidth(rows.map((cells) => cells[0] ?? ""));
+  const lines: string[] = [];
+  for (const [index, finding] of findings.entries()) {
+    const caveat = agenticCaveat(finding.code);
+    const code = rows[index]?.[0];
+    if (caveat === null || code === undefined) {
+      continue;
+    }
+    lines.push(
+      `  ${padEnd(code, codeWidth)}  ${paint(caveat, ANSI.dim, color)}`
+    );
+  }
+  return lines;
+};
+
+const formatFindingsTable = (findings: Finding[], color: boolean): string[] => {
+  if (findings.length === 0) {
+    return [paint("  (none)", ANSI.dim, color)];
+  }
+  const headers = ["Code", "Severity", "Message"] as const;
+  const rows = findings.map((finding) => [
+    finding.code,
+    finding.severity,
+    finding.message,
+  ]);
+  const table = formatTable(headers, rows, color, (cells, index) => {
+    const finding = findings[index];
+    return finding === undefined
+      ? cells
+      : paintFindingCells(cells, finding, color);
+  });
+  return ["", ...table, ...caveatLines(findings, rows, color)];
+};
+
+const formatProjectFindings = (
+  project: Project,
+  findings: Finding[],
+  color: boolean
+): string[] => {
+  const groups = managerGroups(findings, project);
+  if (groups.length === 0) {
+    return formatFindingsTable(findings, color);
+  }
+  const lines: string[] = [];
+  for (const group of groups) {
+    lines.push(
+      "",
+      paint(`  ${group.label}`, ANSI.bold, color),
+      ...formatFindingsTable(group.findings, color)
+    );
+  }
+  return lines;
+};
+
 const formatApplyTable = (changes: ApplyChange[], color: boolean): string[] => {
   if (changes.length === 0) {
     return [];
@@ -152,16 +295,7 @@ const formatApplyTable = (changes: ApplyChange[], color: boolean): string[] => {
     change.next,
     applyStatusLabel(change.status),
   ]);
-  const widths = headers.map((header, index) =>
-    colWidth([header, ...rows.map((row) => row[index] ?? "")])
-  );
-  const line = (cells: readonly string[]): string =>
-    `  ${cells.map((cell, index) => padEnd(cell, widths[index] ?? 0)).join("  ")}`;
-  return [
-    "",
-    paint(line(headers), ANSI.bold, color),
-    ...rows.map((row) => line(row)),
-  ];
+  return ["", ...formatTable(headers, rows, color)];
 };
 
 export const formatApplySkipped = (
@@ -218,16 +352,11 @@ export const formatHuman = (
   ];
   const warnedDirty = new Set<string>();
   for (const { project, findings: projectFindings } of result.projects) {
-    lines.push("", paint(project.root, ANSI.bold, color));
-    for (const finding of projectFindings) {
-      lines.push(
-        `  ${paint(finding.code, ANSI.cyan, color)}  ${paint(finding.severity, SEVERITY_PAINT[finding.severity], color)}  ${finding.message}`
-      );
-      const caveat = agenticCaveat(finding.code);
-      if (caveat !== null) {
-        lines.push(`    ${paint(caveat, ANSI.dim, color)}`);
-      }
-    }
+    lines.push(
+      "",
+      paint(project.root, ANSI.bold, color),
+      ...formatProjectFindings(project, projectFindings, color)
+    );
     const changes = (result.applyChanges ?? []).filter(
       (change) => change.projectRoot === project.root
     );
