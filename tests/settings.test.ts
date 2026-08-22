@@ -431,6 +431,77 @@ test("npm with no registry= emits registry.unpinned under standard", () => {
   expect(findings.some((f) => f.code === "registry.unpinned")).toBe(true);
 });
 
+const CORP_REGISTRY = "https://npm.corp.example/";
+
+const corpPolicy = () =>
+  loadPolicy({ repoToml: `registry = "${CORP_REGISTRY}"\n` });
+
+const registrySetValue = (
+  findings: ReturnType<typeof auditSettings>,
+  code: string,
+  key: string
+): unknown => {
+  const edit = findings
+    .find((f) => f.code === code)
+    ?.fix?.edits.find((item) => item.op === "set" && item.key === key);
+  return edit?.op === "set" ? edit.value : undefined;
+};
+
+test("npm unpinned apply writes the configured registry", () => {
+  const files: Record<string, string> = {
+    "/p/.npmrc": `ignore-scripts=true\naudit=true\naudit-level=high\nmin-release-age=7\n`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+  };
+  const findings = auditSettings(npmProject("/p"), corpPolicy(), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(registrySetValue(findings, "registry.unpinned", "registry")).toBe(
+    CORP_REGISTRY
+  );
+});
+
+test("npm registry that differs from config emits registry.mismatch", () => {
+  const files: Record<string, string> = {
+    "/p/.npmrc": `ignore-scripts=true\nallow-scripts-pin=true\naudit=true\naudit-level=high\nmin-release-age=7\nregistry=https://registry.npmjs.org/\n`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+  };
+  const findings = auditSettings(npmProject("/p"), corpPolicy(), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "registry.mismatch")).toBe(true);
+  expect(registrySetValue(findings, "registry.mismatch", "registry")).toBe(
+    CORP_REGISTRY
+  );
+});
+
+test("npm registry matching config including trailing slash is quiet", () => {
+  const files: Record<string, string> = {
+    "/p/.npmrc": `ignore-scripts=true\nallow-scripts-pin=true\naudit=true\naudit-level=high\nmin-release-age=7\nregistry=https://npm.corp.example\n`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+  };
+  const findings = auditSettings(npmProject("/p"), corpPolicy(), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "registry.mismatch")).toBe(false);
+  expect(findings.some((f) => f.code === "registry.unpinned")).toBe(false);
+});
+
+test("npm with a company registry and no config registry is not a mismatch", () => {
+  const files: Record<string, string> = {
+    "/p/.npmrc": `ignore-scripts=true\nallow-scripts-pin=true\naudit=true\naudit-level=high\nmin-release-age=7\nregistry=${CORP_REGISTRY}\n`,
+    "/p/package-lock.json": `{"lockfileVersion":3}`,
+    "/p/package.json": `{"name":"x","packageManager":"npm@10.9.0"}`,
+  };
+  const findings = auditSettings(npmProject("/p"), loadPolicy({}), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "registry.mismatch")).toBe(false);
+  expect(findings.some((f) => f.code === "registry.unpinned")).toBe(false);
+});
+
 test("npm with no packageManager field emits pm.unpinned under standard", () => {
   const files: Record<string, string> = {
     "/p/.npmrc": validNpmrc,
@@ -494,6 +565,34 @@ test("pnpm with no registry emits registry.unpinned under standard", () => {
     readFile: (p) => files[p] ?? null,
   });
   expect(findings.some((f) => f.code === "registry.unpinned")).toBe(true);
+});
+
+test("pnpm unpinned apply writes the configured registry", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
+    "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "/p/pnpm-workspace.yaml":
+      "packages:\n  - '.'\nminimumReleaseAge: 1440\nonlyBuiltDependencies: []\naudit: true\naudit-level: high\n",
+  };
+  const findings = auditSettings(pnpmProject("/p"), corpPolicy(), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(registrySetValue(findings, "registry.unpinned", "registry")).toBe(
+    CORP_REGISTRY
+  );
+});
+
+test("pnpm registries.default that differs from config emits registry.mismatch", () => {
+  const files: Record<string, string> = {
+    "/p/package.json": `{"name":"x","packageManager":"pnpm@10.0.0"}`,
+    "/p/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "/p/pnpm-workspace.yaml":
+      "packages:\n  - '.'\nminimumReleaseAge: 1440\nonlyBuiltDependencies: []\naudit: true\naudit-level: high\nregistries:\n  default: https://registry.npmjs.org/\n",
+  };
+  const findings = auditSettings(pnpmProject("/p"), corpPolicy(), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "registry.mismatch")).toBe(true);
 });
 
 test("pnpm with no pnpm@ pin emits pm.unpinned under standard", () => {
@@ -629,6 +728,32 @@ test("yarn berry without npmRegistryServer emits registry.unpinned", () => {
   expect(findings.some((f) => f.code === "registry.unpinned")).toBe(true);
 });
 
+test("yarn unpinned apply writes the configured registry", () => {
+  const files: Record<string, string> = {
+    "/y/.yarnrc.yml": `enableScripts: false\n`,
+    "/y/package.json": `{"name":"y","packageManager":"yarn@4.5.0"}`,
+    "/y/yarn.lock": "# yarn\n",
+  };
+  const findings = auditSettings(yarnProject("/y"), corpPolicy(), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(
+    registrySetValue(findings, "registry.unpinned", "npmRegistryServer")
+  ).toBe(CORP_REGISTRY);
+});
+
+test("yarn npmRegistryServer that differs from config emits registry.mismatch", () => {
+  const files: Record<string, string> = {
+    "/y/.yarnrc.yml": `enableScripts: false\nnpmRegistryServer: "https://registry.npmjs.org/"\n`,
+    "/y/package.json": `{"name":"y","packageManager":"yarn@4.5.0"}`,
+    "/y/yarn.lock": "# yarn\n",
+  };
+  const findings = auditSettings(yarnProject("/y"), corpPolicy(), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "registry.mismatch")).toBe(true);
+});
+
 test("bun without install.registry emits registry.unpinned", () => {
   const files: Record<string, string> = {
     "/p/bun.lock": `{"lockfileVersion":1}`,
@@ -639,6 +764,32 @@ test("bun without install.registry emits registry.unpinned", () => {
     readFile: (p) => files[p] ?? null,
   });
   expect(findings.some((f) => f.code === "registry.unpinned")).toBe(true);
+});
+
+test("bun unpinned apply writes the configured registry", () => {
+  const files: Record<string, string> = {
+    "/p/bun.lock": `{"lockfileVersion":1}`,
+    "/p/bunfig.toml": `trustedDependencies = ["foo"]\n`,
+    "/p/package.json": `{"name":"x"}`,
+  };
+  const findings = auditSettings(bunProject("/p"), corpPolicy(), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(
+    registrySetValue(findings, "registry.unpinned", "install.registry")
+  ).toBe(CORP_REGISTRY);
+});
+
+test("bun install.registry.url that differs from config emits registry.mismatch", () => {
+  const files: Record<string, string> = {
+    "/p/bun.lock": `{"lockfileVersion":1}`,
+    "/p/bunfig.toml": `trustedDependencies = ["foo"]\n\n[install.registry]\nurl = "https://registry.npmjs.org/"\n`,
+    "/p/package.json": `{"name":"x"}`,
+  };
+  const findings = auditSettings(bunProject("/p"), corpPolicy(), {
+    readFile: (p) => files[p] ?? null,
+  });
+  expect(findings.some((f) => f.code === "registry.mismatch")).toBe(true);
 });
 
 test("leftover yarn bun and uv lockfiles are high and not fixable", () => {

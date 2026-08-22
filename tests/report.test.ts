@@ -50,6 +50,58 @@ test("formatHuman includes repos scanned, settings findings count, and warnings 
   expect(text).toContain("scripts.unrestricted");
 });
 
+test("formatHuman prints the catalog caveat under an agentic finding", () => {
+  const text = formatHuman({
+    exitCode: 0,
+    projects: [
+      {
+        findings: [
+          {
+            code: "overrides.present",
+            fixable: false,
+            kind: "settings",
+            manager: "npm",
+            message:
+              "overrides create a version precedent the next agent will copy",
+            path: "/p/package.json",
+            severity: "info",
+          },
+        ],
+        project: { gitRoot: "/p", managers: [], root: "/p" },
+      },
+    ],
+    skippedDirty: [],
+  });
+  expect(text).toContain("overrides.present");
+  expect(text).toContain("apply never deletes a pin");
+});
+
+test("formatMarkdown prints the catalog caveat under an agentic finding", () => {
+  const text = formatMarkdown({
+    exitCode: 0,
+    projects: [
+      {
+        findings: [
+          {
+            code: "cache.path-committed",
+            fixable: false,
+            kind: "settings",
+            manager: "npm",
+            message:
+              "committed store or cache path should not live in project config",
+            path: "/p/.npmrc",
+            severity: "info",
+          },
+        ],
+        project: { gitRoot: "/p", managers: [], root: "/p" },
+      },
+    ],
+    skippedDirty: [],
+  });
+  expect(text).toContain("cache.path-committed");
+  expect(text).toContain("never writes");
+});
+
 test("formatHuman counts unique git roots as repos scanned", () => {
   const text = formatHuman({
     exitCode: 0,

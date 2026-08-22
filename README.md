@@ -62,6 +62,7 @@ mailclad audit [path]                 # audit only, never writes (default preset
 mailclad audit . --preset strict      # relaxed | standard | strict
 mailclad audit . --apply              # write settings fixes (clean git tree required)
 mailclad audit . --fix                # same as --apply
+mailclad audit . --apply-agentic      # write safe agentic edits only
 mailclad audit . --apply-advisories   # upgrade packages with known fixes (no major bumps)
 mailclad audit . -i                   # interactive: consent per repo
 mailclad audit . --json               # machine-readable output
@@ -72,6 +73,18 @@ mailclad audit . --report out.md      # markdown report
 Exit code `0` means every project passed. `1` means a policy failure, either settings drift or an advisory at or above the preset's gate. `2` means the run was incomplete: a missing binary, a dirty tree blocked an apply, an audit subprocess died, or no projects were found.
 
 Configuration lives in `~/.config/mailclad/config.toml`, plus `.mailclad.toml` at the scan root or in any repo. The closer file wins, and flags win over files.
+
+Set `registry` when installs should go through a company proxy. `--apply` then writes that URL. A committed pin that does not match emits `registry.mismatch`. Leave it unset and any pinned registry still passes; apply writes `https://registry.npmjs.org/`.
+
+```toml
+# ~/.config/mailclad/config.toml or .mailclad.toml
+registry = "https://npm.corp.example/"
+
+[yarn]
+registry = "https://yarn.corp.example/"
+```
+
+This applies to npm, pnpm (`registry` or `registries.default`), yarn (`npmRegistryServer`), and bun (`install.registry`).
 
 The default **standard** preset requires a **1-day** release-age gate (`minReleaseAgeDays: 1`); **strict** requires 14 days, **relaxed** turns the gate off (0 days).
 
@@ -120,6 +133,18 @@ and yarn defaults `npmMinimalAgeGate` to `1w` and `enableScripts` to `false`, so
 a missing key on those versions is reported as `info` ("you're relying on a safe
 default") rather than `high`. mailclad reads the version from the `packageManager`
 field in `package.json`; with no pin it assumes a current release.
+
+## Agentic checks
+
+By default mailclad also warns (`info`) about settings that confuse coding
+agents: a committed store or cache path, version overrides, pnpm shameful hoist,
+and Yarn or pnpm Plug'n'Play. These never fail the standard gate. `--apply`
+does not write them unless `applyAgentic = true` in config. Pass
+`--apply-agentic` to write only the safe edits (unset an in-repo cache path,
+turn hoist off, set yarn `nodeLinker` to `node-modules`). It never writes a
+home-dir store or deletes an override.
+
+`mailclad audit --help` lists each code, what it means, and the caveat.
 
 ## Advisory audits
 

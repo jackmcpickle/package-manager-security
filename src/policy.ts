@@ -188,12 +188,23 @@ export const policyForRepo = (
 ): Policy => loadPolicy({ ...layers, repoToml });
 
 export interface ResolvedSettings {
+  agentic: boolean;
+  applyAgentic: boolean;
   auditLevel: string;
   ignoreScripts: boolean;
   minReleaseAgeDays: number;
+  registry: string | null;
   requireLockfile: boolean;
   requirePmPin: boolean;
 }
+
+const resolveRegistry = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+};
 
 export const resolveSettings = (
   policy: Policy,
@@ -202,6 +213,9 @@ export const resolveSettings = (
   const base = PRESET_DEFAULTS[policy.preset];
   const extra = { ...policy.overrides, ...policy.perManager[manager] };
   return {
+    agentic: typeof extra.agentic === "boolean" ? extra.agentic : true,
+    applyAgentic:
+      typeof extra.applyAgentic === "boolean" ? extra.applyAgentic : false,
     auditLevel:
       typeof extra.auditLevel === "string" ? extra.auditLevel : base.auditLevel,
     ignoreScripts:
@@ -212,6 +226,7 @@ export const resolveSettings = (
       typeof extra.minReleaseAgeDays === "number"
         ? extra.minReleaseAgeDays
         : base.minReleaseAgeDays,
+    registry: resolveRegistry(extra.registry),
     requireLockfile:
       typeof extra.requireLockfile === "boolean"
         ? extra.requireLockfile

@@ -1,3 +1,4 @@
+import { AGENTIC_CATALOG } from "./agentic";
 import { APP_NAME } from "./app-name";
 
 const ANSI = {
@@ -66,6 +67,11 @@ const COMMANDS: readonly CommandHelp[] = [
       {
         description: "Upgrade packages with known fixes (no major bumps)",
         names: ["--apply-advisories"],
+      },
+      {
+        description:
+          "Write safe agentic edits only. Never writes a home-dir store or deletes overrides",
+        names: ["--apply-agentic"],
       },
       {
         description: "Allow major version bumps when applying advisories",
@@ -228,6 +234,24 @@ export const formatCommandHelp = (
     for (const flag of command.flags) {
       lines.push(
         row(flagLabel(flag), flag.description, colWidth(labels), color)
+      );
+    }
+  }
+  if (command.name === "audit") {
+    lines.push(
+      "",
+      heading("Agentic checks:", color),
+      paint(
+        "Warned by default (agentic = true). Apply is off (applyAgentic = false) unless --apply-agentic.",
+        ANSI.dim,
+        color
+      )
+    );
+    const codeWidth = colWidth(AGENTIC_CATALOG.map((check) => check.code));
+    for (const check of AGENTIC_CATALOG) {
+      lines.push(
+        row(check.code, check.description, codeWidth, color),
+        paint(`    ${check.caveat}`, ANSI.dim, color)
       );
     }
   }

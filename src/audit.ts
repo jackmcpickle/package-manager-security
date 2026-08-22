@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { auditAdvisories } from "./advisories";
+import { isAgenticCode } from "./agentic";
 import { CONFIG_FILE_NAME } from "./app-name";
 import { applyAdvisories } from "./apply-advisories";
 import type { ApplyChoice, ApplyPrompt } from "./apply-advisories";
@@ -65,6 +66,7 @@ export type AuditMode =
   | {
       kind: "apply";
       settings: boolean;
+      agenticOnly?: boolean;
       advisories: boolean;
       allowMajors: boolean;
       write: WriteDeps;
@@ -369,9 +371,18 @@ interface RecordedAudit {
   pendingApply: ApplySettingsItem[];
 }
 
+const findingsForSettingsApply = (
+  findings: Finding[],
+  agenticOnly: boolean
+): Finding[] =>
+  agenticOnly
+    ? findings.filter((finding) => isAgenticCode(finding.code))
+    : findings;
+
 const recordAuditedRow = (
   row: AuditedProject,
   shouldApplySettings: boolean,
+  agenticOnly: boolean,
   acc: RecordedAudit
 ): void => {
   if (row.advisoryIncomplete) {
@@ -384,7 +395,7 @@ const recordAuditedRow = (
   acc.projects.push({ findings: row.findings, project: row.project });
   if (shouldApplySettings) {
     acc.pendingApply.push({
-      findings: row.findings,
+      findings: findingsForSettingsApply(row.findings, agenticOnly),
       policy: row.projectPolicy,
       project: row.project,
     });
@@ -393,7 +404,8 @@ const recordAuditedRow = (
 
 const recordAudited = (
   audited: AuditedProject[],
-  shouldApplySettings: boolean
+  shouldApplySettings: boolean,
+  agenticOnly: boolean
 ): RecordedAudit => {
   const acc: RecordedAudit = {
     incomplete: false,
@@ -402,7 +414,7 @@ const recordAudited = (
     projects: [],
   };
   for (const row of audited) {
-    recordAuditedRow(row, shouldApplySettings, acc);
+    recordAuditedRow(row, shouldApplySettings, agenticOnly, acc);
   }
   return acc;
 };
@@ -541,6 +553,9 @@ const exitCodeFor = (
 const shouldApplySettings = (mode: AuditMode): boolean =>
   mode.kind === "apply" && mode.settings;
 
+const isAgenticOnlyApply = (mode: AuditMode): boolean =>
+  mode.kind === "apply" && mode.agenticOnly === true;
+
 export const auditPath = async (
   root: string,
   input: AuditPathInput
@@ -557,7 +572,11 @@ export const auditPath = async (
   const audited = await mapPool(discovered, concurrency, (project) =>
     auditOneProject(project, input, cache, now, digest)
   );
-  const recorded = recordAudited(audited, shouldApplySettings(input.mode));
+  const recorded = recordAudited(
+    audited,
+    shouldApplySettings(input.mode),
+    isAgenticOnlyApply(input.mode)
+  );
   const applied = await applyPhase(audited, recorded.pendingApply, input);
   return {
     applyChanges: applied.applyChanges,
