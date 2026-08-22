@@ -84,24 +84,28 @@ const yamlScalar = (value: unknown): string => {
   return JSON.stringify(value);
 };
 
+const yamlKey = (key: string): string => quoteYamlString(key);
+
 const yamlArrayLines = (key: string, value: unknown[]): string[] => {
+  const label = yamlKey(key);
   if (value.length === 0) {
-    return [`${key}: []`];
+    return [`${label}: []`];
   }
-  return [`${key}:`, ...value.map((item) => `  - ${yamlScalar(item)}`)];
+  return [`${label}:`, ...value.map((item) => `  - ${yamlScalar(item)}`)];
 };
 
 const yamlObjectLines = (
   key: string,
   value: Record<string, unknown>
 ): string[] => {
+  const label = yamlKey(key);
   if (Object.keys(value).length === 0) {
-    return [`${key}: {}`];
+    return [`${label}: {}`];
   }
   return [
-    `${key}:`,
+    `${label}:`,
     ...Object.entries(value).map(
-      ([childKey, child]) => `  ${childKey}: ${yamlScalar(child)}`
+      ([childKey, child]) => `  ${yamlKey(childKey)}: ${yamlScalar(child)}`
     ),
   ];
 };
@@ -114,7 +118,7 @@ const stringifyYaml = (obj: Record<string, unknown>): string => {
     } else if (isPlainObject(value)) {
       lines.push(...yamlObjectLines(key, value));
     } else {
-      lines.push(`${key}: ${yamlScalar(value)}`);
+      lines.push(`${yamlKey(key)}: ${yamlScalar(value)}`);
     }
   }
   return `${lines.join("\n")}\n`;
